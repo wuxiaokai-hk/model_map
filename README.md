@@ -4,7 +4,11 @@ Group the variables of an equation model and draw a map you can unfold, like zoo
 
 Give it the model's equations (EViews style, `Y = formula`), or just a list of which variable feeds which. It finds groups of variables that are densely linked inside and loosely linked to the rest. Each group is split again until every view fits on one screen. It writes one HTML page with four views:
 
-- **All variables, unfold step by step.** One map of the whole model that starts folded. Click a group to unfold it in place: its sub-groups appear in the same map, linked to everything else, and you can go down to single variables while the other groups stay folded.
+- **All variables, unfold step by step.** The whole model drawn like a flowchart (Mermaid-style) that starts folded.
+  - **Boxes:** each box is a group. Its first line is its regions, then its concepts, then its size and average gap.
+  - **Unfolding:** click a box and it becomes a frame with its sub-groups or variables inside, laid out the same way. Frames nest as deep as you unfold; click a frame's title to fold it back.
+  - **Arrows:** they run mostly left to right, from drivers to results. The order is chosen so that as many links as possible run forward (a greedy minimum feedback arc set), so loops don't scramble the picture; links that run back are dashed. Only each box's strongest links are drawn unless you tick "all links".
+  - **Copy as Mermaid:** gives the current view as Mermaid code, for GitHub, Confluence, Notion or mermaid.live.
 - **Main chain, zoomable.** The route through the model, like directions on a map. Click a step to see the chain inside it.
 - **Around a variable.** What feeds a variable and what it feeds, 0–4 equations away in each direction. Double-click a box to put it in the middle.
 - **All variables, by group.** A table of every variable, folded by the same groups.
