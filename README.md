@@ -2,28 +2,64 @@
 
 Group the variables of an equation model and draw a map you can unfold, like zooming a map.
 
-Give it the model's equations (EViews style, `Y = formula`). It finds groups of variables that are densely linked inside and loosely linked to the rest. Each group is split again until every view fits on one screen. It writes one HTML page with:
+Give it the model's equations (EViews style, `Y = formula`), or just a list of which variable feeds which. It finds groups of variables that are densely linked inside and loosely linked to the rest. Each group is split again until every view fits on one screen. It writes one HTML page with four views:
 
 - **All variables, unfold step by step.** One map of the whole model that starts folded. Click a group to unfold it in place: its sub-groups appear in the same map, linked to everything else, and you can go down to single variables while the other groups stay folded.
 - **Main chain, zoomable.** The route through the model, like directions on a map. Click a step to see the chain inside it.
-- **Find a variable.** Unfolds the map down to it and shows its equation, its inputs, and what uses it.
+- **Around a variable.** What feeds a variable and what it feeds, 0–4 equations away in each direction. Double-click a box to put it in the middle.
 - **All variables, by group.** A table of every variable, folded by the same groups.
 
-Scenario data is optional. With `--a` and `--b`, boxes are coloured by the gap B − A.
+**Find a variable** by name or description: a list of matches appears as you type. Picking one unfolds the map down to it and opens its panel, which shows the equation, what it uses, what uses it, its groups, layers and gap.
 
-Standard-library Python only (3.8+). No pip install. Reads .txt/.prg equation files and .csv/.xlsx data.
+**Optional extras:**
+- Scenario data (`--a`, `--b`) colours boxes by the gap B − A. Descriptions in the data files are picked up automatically; `--desc` adds more.
+
+Standard-library Python only (3.8+). No pip install. It's one file, so to use it in another project, copy `model_map.py` there and `import model_map`.
 
 ## Quick start
 
 ```bash
 python model_map.py --eq model.txt -o map.html                                   # structure only
 python model_map.py --eq model.txt --a base.csv --b scenario.xlsx -o map.html    # coloured by the gap
-python model_map.py --eq model.txt --groups --depth 2                            # also print the group tree
+python model_map.py --links links.csv -o map.html                                # any model: a table of links
+python model_map.py --eq model.txt --json map.json --csv variables.csv           # data for other tools
+python model_map.py --eq model.txt --groups --depth 2                            # print the group tree
 ```
 
 Open `map.html` in any browser.
 
-Examples:
+## Use it from Python (other projects)
+
+```python
+import model_map as mm                         # model_map.py next to your script
+
+m = mm.ModelMap.from_equations(['model.txt'])               # EViews equations
+m = mm.ModelMap.from_links([('FOIL', 'FCPI'), ('FCPI', 'FGDP')])   # (from, to) pairs from anywhere
+m = mm.ModelMap.from_links_csv('links.csv')                 # columns from/to, source/target or driver/variable
+m = mm.ModelMap({'FGDP': ['FC', 'FI'], 'FC': ['FYPDPI']})   # variable -> what its equation uses
+
+m.add_scenarios(['base.csv'], ['scen.xlsx'])   # optional: gaps B - A for colours
+m.set_gaps({'FGDP': -1.4})                     # ... or your own numbers
+m.set_descriptions('descriptions.csv')         # ... and labels
+
+m.groups()                      # [{'name', 'size', 'keys', 'members', 'groups': [...]}, ...]
+m.group_path('FHPI.ICA')        # ['around FYPDPI$.IWY', 'ICA + ICO']
+m.key_variables('ICA + ICO')    # the fewest variables its outside links pass through
+m.upstream('FHPI.ICA', 2)       # {'FHPI.IUSA': 1, 'FYPDPI$.ICA': 1, ...}   what feeds it, by steps
+m.downstream('FOIL')            # what it feeds
+m.link_path('FOIL', 'FHPI.ICA') # ['FOIL', 'FCPI.IUSA', 'FRGT10Y.IUSA', 'FHPI.IUSA', 'FHPI.ICA']
+m.layers()['FOIL']              # longest chain of equations downstream
+m.table()                       # one row per variable with its group path
+m.summary()
+
+m.to_html('map.html'); m.to_json('map.json'); m.to_csv('variables.csv')
+```
+
+`examples/use_from_python.py` runs all of this on the example model. Options for the groups go to the constructor: `boxes=40`, `by_geo=False`, `geo_sep='auto'`, `geo_names=True`, `exog=[...]`.
+
+To install it instead (where your environment allows): `pip install git+https://github.com/wuxiaokai-hk/model_map`. That gives `import model_map` and a `model-map` command.
+
+## Examples
 
 ```bash
 python model_map.py --eq examples/macro/equations.txt --a examples/macro/baseline.csv --b examples/macro/alt_scenario.xlsx -o examples/macro_map.html
@@ -32,7 +68,20 @@ python examples/make_large_model.py large_model      # a 20,000-series test mode
 python model_map.py --eq large_model/equations.txt --a large_model/baseline.csv --b large_model/alt_scenario.csv -o large_map.html
 ```
 
-On the 20,000-series model the map is built in about 6 seconds as a 3.5 MB page. The page opens in under half a second, and each click takes about 0.2 seconds.
+On the 20,000-series model the map is built in about 5 seconds as a 3.5 MB page. The page opens in under half a second, and each click takes about 0.2 seconds.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests
+```
+
+The tests check that:
+- every variable sits in exactly one group, and sub-groups split their parent exactly;
+- every view fits the box limit;
+- every link between a group and the rest touches one of its key variables;
+- loops count as one layer;
+- the page, JSON and CSV outputs are written correctly.
 
 ## How the groups are found
 
@@ -73,6 +122,9 @@ N⁻(u) is the number of distinct chains from any input (a variable with no equa
 | Option | Default | |
 |---|---|---|
 | `--eq FILE` | | equation file(s) or folder; repeatable |
+| `--links FILE` | | instead of equations: a csv/xlsx of links (from/to columns); repeatable |
+| `--desc FILE` | | csv/xlsx of variable descriptions (name, description) |
+| `--json FILE`, `--csv FILE` | | also write groups, layers, links and gaps as JSON; every variable with its group path as CSV |
 | `--eq-extra FILE` | | more equations that override `--eq`, e.g. a second version of the model |
 | `--a FILE`, `--b FILE` | | optional scenario data, to colour boxes by the gap B − A |
 | `--exog NAMES` | | variables to treat as exogenous (names, or a file of names) |
@@ -81,7 +133,7 @@ N⁻(u) is the number of distinct chains from any input (a variable with no equa
 | `--geo-sep` | auto | separator before geography codes in names: `.`, `_` or auto |
 | `--no-geo-names` | off | don't use geographies to name groups |
 | `--groups`, `--depth N` | | also print the group tree in the terminal |
-| `--title`, `-o FILE`, `-q` | | page title, output file, quiet |
+| `--title`, `-o FILE`, `-q` | | page title, output page (default `model_map.html`), quiet |
 
 ## Equations
 

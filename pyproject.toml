@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model_map"
+version = "0.2.0"
+description = "Group the variables of an equation model and draw a map you can unfold"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+model-map = "model_map:main"
+
+[tool.setuptools]
+py-modules = ["model_map"]

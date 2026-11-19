@@ -1464,88 +1464,417 @@ def gaps(A, B, names):
     return out
 
 
+def _read_pairs(path, sheet=None):
+    """Rows of a csv/xlsx file as lists of strings (header included)."""
+    grid, _ = read_grid(path, sheet)
+    return [[_clean(c) if c is not None else '' for c in row] for row in grid]
+
+
+class ModelMap:
+    """The links of a model (which variables each variable's equation uses), its groups and its map.
+
+    Build it from equations, from a list of links, or from a dict, then ask questions or write the page:
+
+        import model_map as mm
+        m = mm.ModelMap.from_equations(['model.txt'])
+        m = mm.ModelMap.from_links([('FOIL', 'FCPI'), ('FCPI', 'FGDP')])
+        m = mm.ModelMap({'FGDP': ['FC', 'FI'], 'FC': ['FYPDPI']})       # variable -> what it uses
+        m.add_scenarios(['base.csv'], ['scen.xlsx'])                    # optional: gaps for colours
+        m.group_path('FGDP$.IUSA'); m.upstream('FHPI.ICA', 2); m.link_path('FOIL', 'FHPI.ICA')
+        m.to_html('map.html'); m.to_json('map.json')
+    """
+
+    def __init__(self, parents, equations=None, descriptions=None, exog=(), boxes=40, by_geo=False,
+                 geo_sep='auto', geo_names=True):
+        exog = {str(x).upper() for x in exog}
+        par = defaultdict(set)
+        for n, ps in dict(parents).items():
+            n = str(n).upper()
+            par[n]                                             # keep variables with no inputs
+            if n in exog:
+                continue
+            par[n].update(str(p).upper() for p in ps if str(p).upper() != n)
+        names = set(par)
+        for ps in par.values():
+            names.update(ps)
+        self._par = par
+        self._extra = set()
+        self.names = names
+        self.equations = {str(k).upper(): v for k, v in (equations or {}).items()}
+        self.descriptions = {str(k).upper(): v for k, v in (descriptions or {}).items()}
+        self.exog = exog
+        self.gap = {}                                          # name -> (gap at end %, largest gap %)
+        self.data_files = ([], [])
+        self.boxes, self.by_geo, self.geo_sep, self.geo_names = boxes, by_geo, geo_sep, geo_names
+        self.n_equations = len(self.equations) or sum(1 for n in par if par[n])
+        self.unread = []
+        self._cache = {}
+
+    # ---- constructors
+    @classmethod
+    def from_equations(cls, paths, extra=None, exog=None, **kw):
+        """EViews-style equation files or folders. `extra` files override equations of the same variable."""
+        paths = [paths] if isinstance(paths, str) else list(paths)
+        eqs, addl, stats, fails = load_equations(paths)
+        for e in ([extra] if isinstance(extra, str) else (extra or [])):
+            e2, a2, _, f2 = load_equations([e])
+            eqs.update(e2)
+            addl.update(a2)
+            fails += f2
+        ex = set(load_exog(exog if isinstance(exog, (list, tuple)) else ([exog] if exog else [])))
+        m = cls({n: e.drivers for n, e in eqs.items()}, equations={n: e.text for n, e in eqs.items()}, exog=ex, **kw)
+        m.n_equations = len(eqs)
+        m.unread = fails
+        m.sources = [os.path.basename(p) for p in paths]
+        return m
+
+    @classmethod
+    def from_links(cls, links, **kw):
+        """Links as (from, to) pairs: `from` is used in the equation of `to`."""
+        par = defaultdict(set)
+        for a, b in links:
+            par[str(b).upper()].add(str(a).upper())
+            par[str(a).upper()]
+        return cls(par, **kw)
+
+    @classmethod
+    def from_links_csv(cls, path, src=None, dst=None, sheet=None, **kw):
+        """A csv/xlsx table of links. Columns named from/to, source/target, driver/variable or input/output
+        (or give src= and dst=); otherwise the first two columns. A third column 'description' is ignored."""
+        rows = [r for r in _read_pairs(path, sheet) if any(r)]
+        if not rows:
+            raise ValueError('%s: empty' % path)
+        h = [c.strip().lower() for c in rows[0]]
+        pairs = [('from', 'to'), ('source', 'target'), ('driver', 'variable'), ('input', 'output'), ('x', 'y')]
+        i = j = None
+        if src and dst:
+            i, j = h.index(src.lower()), h.index(dst.lower())
+        else:
+            for a, b in pairs:
+                if a in h and b in h:
+                    i, j = h.index(a), h.index(b)
+                    break
+        body = rows[1:] if i is not None else rows
+        if i is None:
+            i, j = 0, 1
+            if h[0] in ('from', 'source') or not any(ch.isdigit() or ch.isalpha() for ch in rows[0][0]):
+                body = rows[1:]
+        m = cls.from_links([(r[i], r[j]) for r in body if len(r) > max(i, j) and r[i] and r[j]], **kw)
+        m.sources = [os.path.basename(path)]
+        return m
+
+    # ---- optional extras
+    def add_scenarios(self, a_paths, b_paths):
+        """Read scenario A and B (csv/xlsx) and keep each variable's gap B - A in % of A."""
+        a_paths = [a_paths] if isinstance(a_paths, str) else list(a_paths)
+        b_paths = [b_paths] if isinstance(b_paths, str) else list(b_paths)
+        A, B = load_scenario(a_paths, 'A'), load_scenario(b_paths, 'B')
+        self._extra.update(A.series)
+        self._extra.update(B.series)
+        for sc in (A, B):
+            for n, d in sc.desc.items():
+                self.descriptions.setdefault(n, d)
+        self.gap = gaps(A, B, set(A.series) | set(B.series))
+        self.data_files = ([os.path.basename(p) for p in a_paths], [os.path.basename(p) for p in b_paths])
+        self._cache.clear()
+        return self
+
+    def set_gaps(self, mapping):
+        """Your own numbers to colour the boxes: name -> value (or (value at end, largest))."""
+        self.gap = {str(k).upper(): (tuple(v) if isinstance(v, (list, tuple)) else (float(v), float(v)))
+                    for k, v in mapping.items() if v is not None}
+        self._cache.clear()
+        return self
+
+    def set_descriptions(self, mapping_or_path):
+        """name -> description, or a csv/xlsx file with name and description columns."""
+        if isinstance(mapping_or_path, str):
+            rows = [r for r in _read_pairs(mapping_or_path) if len(r) >= 2 and r[0]]
+            if rows and rows[0][0].strip().lower() in ('name', 'variable', 'mnemonic', 'series'):
+                rows = rows[1:]
+            mapping_or_path = {r[0]: r[1] for r in rows}
+        self.descriptions.update({str(k).upper(): str(v) for k, v in mapping_or_path.items() if v})
+        return self
+
+    # ---- the graph
+    @property
+    def nodes(self):
+        if 'nodes' not in self._cache:
+            self._cache['nodes'] = sorted(self.names | self._extra)
+        return self._cache['nodes']
+
+    def _ix(self):
+        if 'ix' not in self._cache:
+            nodes = self.nodes
+            idx = {n: i for i, n in enumerate(nodes)}
+            P = [sorted(idx[p] for p in self._par.get(n, ()) if p in idx) for n in nodes]
+            C = [[] for _ in nodes]
+            for v, ps in enumerate(P):
+                for u in ps:
+                    C[u].append(v)
+            self._cache['ix'] = (idx, P, C)
+        return self._cache['ix']
+
+    def parents(self, name):
+        """Variables that `name`'s equation uses."""
+        return sorted(self._par.get(name.upper(), ()))
+
+    def children(self, name):
+        """Variables whose equations use `name`."""
+        idx, P, C = self._ix()
+        i = idx.get(name.upper())
+        return [] if i is None else [self.nodes[v] for v in C[i]]
+
+    def upstream(self, name, depth=None):
+        """Everything that feeds `name`, within `depth` steps (None = all): {variable: steps}."""
+        return self._walk(name, depth, up=True)
+
+    def downstream(self, name, depth=None):
+        """Everything `name` feeds, within `depth` steps (None = all): {variable: steps}."""
+        return self._walk(name, depth, up=False)
+
+    def _walk(self, name, depth, up):
+        idx, P, C = self._ix()
+        i = idx.get(name.upper())
+        if i is None:
+            raise KeyError(name)
+        nb = P if up else C
+        seen, q = {i: 0}, deque([i])
+        while q:
+            u = q.popleft()
+            if depth is not None and seen[u] >= depth:
+                continue
+            for v in nb[u]:
+                if v not in seen:
+                    seen[v] = seen[u] + 1
+                    q.append(v)
+        del seen[i]
+        return {self.nodes[v]: d for v, d in sorted(seen.items(), key=lambda kv: (kv[1], self.nodes[kv[0]]))}
+
+    def link_path(self, src, dst):
+        """Shortest chain of equations from `src` to `dst` (list of names), or None if `src` cannot reach it."""
+        idx, P, C = self._ix()
+        a, b = idx.get(src.upper()), idx.get(dst.upper())
+        if a is None or b is None:
+            raise KeyError(src if a is None else dst)
+        prev, q = {a: None}, deque([a])
+        while q:
+            u = q.popleft()
+            if u == b:
+                out = []
+                while u is not None:
+                    out.append(self.nodes[u])
+                    u = prev[u]
+                return out[::-1]
+            for v in C[u]:
+                if v not in prev:
+                    prev[v] = u
+                    q.append(v)
+        return None
+
+    def layers(self):
+        """name -> longest chain of equations downstream (a loop counts as one layer)."""
+        if 'layers' not in self._cache:
+            L = compute_layers({n: list(self._par.get(n, ())) for n in self.nodes})
+            self._cache['layers'] = L
+        return {n: v[0] for n, v in self._cache['layers'].items()}
+
+    def _geo(self):
+        if 'geo' not in self._cache:
+            self._cache['geo'] = detect_geo(self.nodes, self.geo_sep) if self.geo_names else (None, set())
+        return self._cache['geo']
+
+    def _tree(self):
+        key = ('tree', self.boxes, self.by_geo)
+        if key not in self._cache:
+            idx, P, C = self._ix()
+            self._cache[key] = compute_groups(self.nodes, P, geo=self._geo()[0], boxes=self.boxes, by_geo=self.by_geo)
+        return self._cache[key]
+
+    def groups(self):
+        """The group tree with names: [{'name', 'size', 'keys', 'members', 'groups': [...]}, ...].
+        Variables in no equation at all are in a last group '(not linked)'."""
+        nodes = self.nodes
+
+        def conv(g):
+            out = {'name': g['lab'], 'size': len(g['m']), 'keys': [nodes[i] for i in g['k']],
+                   'members': [nodes[i] for i in g['m']]}
+            if g.get('ch'):
+                out['groups'] = [conv(c) for c in g['ch']]
+            return out
+        T = self._tree()['tree']
+        res = [conv(g) for g in T]
+        seen = {i for g in T for i in g['m']}
+        rest = [n for i, n in enumerate(nodes) if i not in seen]
+        if rest:
+            res.append({'name': '(not linked)', 'size': len(rest), 'keys': [], 'members': rest})
+        return res
+
+    def group_path(self, name):
+        """The groups a variable sits in, from the top: ['IAK … IMS (26 regions)', 'ICA', ...]."""
+        name = name.upper()
+
+        def find(gs, acc):
+            for g in gs:
+                if name in g['members']:
+                    a = acc + [g['name']]
+                    return find(g.get('groups') or [], a) or a
+            return None
+        return find(self.groups(), []) or []
+
+    def key_variables(self, group_name):
+        """Key variables of the first group with this name (the fewest variables all its outside links pass through)."""
+        def find(gs):
+            for g in gs:
+                if g['name'] == group_name:
+                    return g['keys']
+                r = find(g.get('groups') or [])
+                if r is not None:
+                    return r
+        return find(self.groups())
+
+    def table(self):
+        """One row per variable: dict with level_1.., variable, description, layers, gap_end, key."""
+        rows, L = [], self.layers()
+
+        def walk(g, path):
+            p = path + [g['name']]
+            if g.get('groups'):
+                for c in g['groups']:
+                    walk(c, p)
+            else:
+                ks = set(g['keys'])
+                for n in g['members']:
+                    r = {'level_%d' % (k + 1): x for k, x in enumerate(p)}
+                    r.update(variable=n, description=self.descriptions.get(n, ''), layers=L.get(n, 0),
+                             gap_end=self.gap[n][0] if n in self.gap else None, key=n in ks)
+                    rows.append(r)
+        for g in self.groups():
+            walk(g, [])
+        return rows
+
+    # ---- output
+    def summary(self):
+        G = self.groups()
+
+        def depth(gs):
+            return 1 + max((depth(g['groups']) for g in gs if g.get('groups')), default=0) if gs else 0
+        L = self.layers()
+        return {'variables': len(self.nodes), 'equations': self.n_equations, 'top_groups': len(G),
+                'levels': depth(G), 'boxes_per_view': self.boxes, 'longest_chain': max(L.values(), default=0),
+                'changed': len(self.gap), 'unread_lines': len(self.unread)}
+
+    def to_json(self, path=None):
+        """Groups, layers, links and gaps as JSON (written to `path` if given; the dict is returned)."""
+        out = {'summary': self.summary(), 'groups': self.groups(), 'layers': self.layers(),
+               'links': {n: self.parents(n) for n in self.nodes if self._par.get(n)},
+               'gaps': {n: list(v) for n, v in self.gap.items()}, 'descriptions': self.descriptions}
+        if path:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(out, f, indent=1)
+        return out
+
+    def to_csv(self, path):
+        """Every variable with its group path (level_1, level_2, ...), layers, gap and key flag."""
+        rows = self.table()
+        nl = max((sum(1 for k in r if k.startswith('level_')) for r in rows), default=0)
+        cols = ['level_%d' % (k + 1) for k in range(nl)] + ['variable', 'description', 'layers', 'gap_end', 'key']
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            for r in rows:
+                w.writerow(['' if r.get(c) is None else r.get(c, '') for c in cols])
+        return path
+
+    def payload(self, title=None):
+        nodes = self.nodes
+        idx, P, C = self._ix()
+        self.layers()
+        L = self._cache['layers']
+        comps = _scc_order(list(range(len(nodes))), {v: P[v] for v in range(len(nodes))})
+        cid = [0] * len(nodes)
+        for ci, c in enumerate(comps):
+            for v in c:
+                cid[v] = ci
+        T = self._tree()
+        has = bool(self.gap)
+        return {
+            'meta': {'title': title or ', '.join(getattr(self, 'sources', []) or ['model']),
+                     'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                     'eq_files': getattr(self, 'sources', []), 'has_data': has,
+                     'a': self.data_files[0], 'b': self.data_files[1],
+                     'n_eq': self.n_equations, 'n_fail': len(self.unread), 'exog': sorted(self.exog)},
+            'nodes': nodes, 'par': P,
+            'eq': [str(self.equations.get(n, ''))[:600] for n in nodes],
+            'desc': [self.descriptions.get(n, '') for n in nodes] if self.descriptions else None,
+            'ex': [1 if n in self.exog else 0 for n in nodes],
+            'gap': [list(self.gap[n]) if n in self.gap else None for n in nodes] if has else None,
+            'lay': [L.get(n, (0,))[0] for n in nodes], 'lp': [L.get(n, (0, 0, 0, 0, 1))[4] for n in nodes],
+            'cid': cid, 'tree': T['tree'], 'boxes': T['boxes'],
+        }
+
+    def to_html(self, path, title=None):
+        """Write the interactive map page."""
+        data = self.payload(title)
+        html = HTML.replace('__TITLE__', _esc(data['meta']['title'])).replace(
+            '__DATA__', json.dumps(data, separators=(',', ':')).replace('</', '<\\/'))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(html)
+        return path
+
+
 def build(args):
+    """Command line: build a ModelMap from the arguments and write what was asked for."""
     say = (lambda m: None) if args.quiet else (lambda m: print(m, file=sys.stderr))
     t0 = time.time()
-    say('Reading equations ...')
-    eqs, addl, stats, fails = load_equations(args.eq)
-    for e in (args.eq_extra or []):
-        e2, a2, _, f2 = load_equations([e])
-        eqs.update(e2)
-        addl.update(a2)
-        fails += f2
-    exog = set(load_exog(args.exog))
-    par = defaultdict(set)
-    for n, e in eqs.items():
-        if n in exog:
-            continue
-        par[n].update(d for d in e.drivers if d != n)
-    names = set(par)
-    for ps in par.values():
-        names.update(ps)
-    A = B = None
-    if args.a and args.b:
-        say('Reading scenario A ...')
-        A = load_scenario(args.a, 'A')
-        say('Reading scenario B ...')
-        B = load_scenario(args.b, 'B')
-        names.update(A.series)
-        names.update(B.series)
-    nodes = sorted(names)
-    idx = {n: i for i, n in enumerate(nodes)}
-    P = [sorted(idx[p] for p in par.get(n, ()) if p in idx) for n in nodes]
-    geo, codes = (None, set()) if args.no_geo_names else detect_geo(nodes, args.geo_sep)
-    say('%d variables, %d equations%s' % (len(nodes), len(eqs),
-                                          (', %d geographies (used only to name groups)' % len(codes)) if codes else ''))
-    t = time.time()
-    L = compute_layers({n: list(par.get(n, ())) for n in nodes})
-    comps = _scc_order(list(range(len(nodes))), {v: P[v] for v in range(len(nodes))})
-    cid = [0] * len(nodes)
-    for ci, c in enumerate(comps):
-        for v in c:
-            cid[v] = ci
-    G = compute_groups(nodes, P, geo=geo, boxes=args.map_boxes, by_geo=args.map_geo)
-
-    def depth(ts):
-        return 1 + max((depth(x['ch']) for x in ts if x.get('ch')), default=0) if ts else 0
-    say('Groups: %d at the top, %d levels, at most %d boxes per view; layers and loops (%.1fs)'
-        % (len(G['tree']), depth(G['tree']), G['boxes'], time.time() - t))
-    gp = gaps(A, B, nodes) if A else {}
-    data = {
-        'meta': {'title': args.title or os.path.basename(args.eq[0]), 'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                 'eq_files': [os.path.basename(x) for x in args.eq], 'has_data': bool(A),
-                 'a': [os.path.basename(x) for x in (args.a or [])], 'b': [os.path.basename(x) for x in (args.b or [])],
-                 'n_eq': len(eqs), 'n_fail': len(fails), 'exog': sorted(exog)},
-        'nodes': nodes, 'par': P,
-        'eq': [eqs[n].text[:600] if n in eqs else '' for n in nodes],
-        'ex': [1 if n in exog else 0 for n in nodes],
-        'gap': [list(gp[n]) if n in gp else None for n in nodes] if A else None,
-        'lay': [L.get(n, (0,))[0] for n in nodes], 'lp': [L.get(n, (0, 0, 0, 0, 1))[4] for n in nodes],
-        'cid': cid, 'tree': G['tree'], 'boxes': G['boxes'],
-    }
-    out = args.out
-    html = HTML.replace('__TITLE__', _esc(data['meta']['title'])).replace(
-        '__DATA__', json.dumps(data, separators=(',', ':')).replace('</', '<\\/'))
-    with open(out, 'w', encoding='utf-8') as f:
-        f.write(html)
-    say('Map written: %s (%.1f MB) in %.1fs' % (out, os.path.getsize(out) / 1e6, time.time() - t0))
+    kw = dict(boxes=args.map_boxes, by_geo=args.map_geo, geo_sep=args.geo_sep, geo_names=not args.no_geo_names)
+    if args.links:
+        say('Reading links ...')
+        m = ModelMap.from_links_csv(args.links[0], **kw)
+        for extra in args.links[1:]:
+            m2 = ModelMap.from_links_csv(extra)
+            for n, ps in m2._par.items():
+                m._par[n].update(ps)
+            m.names |= m2.names
+            m._cache.clear()
+    else:
+        say('Reading equations ...')
+        m = ModelMap.from_equations(args.eq, extra=args.eq_extra, exog=args.exog, **kw)
+    if args.a:
+        say('Reading scenarios ...')
+        m.add_scenarios(args.a, args.b)
+    if args.desc:
+        m.set_descriptions(args.desc)
+    S = m.summary()
+    say('%d variables, %d equations, %d groups at the top, %d levels, at most %d boxes per view, longest chain %d'
+        % (S['variables'], S['equations'], S['top_groups'], S['levels'], S['boxes_per_view'], S['longest_chain']))
+    if args.json:
+        m.to_json(args.json)
+        say('JSON written: %s' % args.json)
+    if args.csv:
+        m.to_csv(args.csv)
+        say('CSV written: %s' % args.csv)
+    if args.out or not (args.json or args.csv or args.groups):
+        out = args.out or 'model_map.html'
+        m.to_html(out, args.title)
+        say('Map written: %s (%.1f MB) in %.1fs' % (out, os.path.getsize(out) / 1e6, time.time() - t0))
     if args.groups:
-        print_groups(nodes, G, args.depth)
-    return out
+        print_groups(m.groups(), args.depth)
+    return m
 
 
-def print_groups(nodes, G, depth):
-    print('Groups, at most %d boxes per view. Key variables = the fewest variables that every link between '
-          'the group and the rest of the model passes through.' % G['boxes'])
+def print_groups(groups, depth):
+    print('Groups. Key variables = the fewest variables that every link between the group and the rest of '
+          'the model passes through.')
 
-    def walk(ts, ind, d):
-        for g in ts:
-            ks = [nodes[i] for i in g['k']]
-            print('%s%-28s %6d variables  %d key%s: %s%s' % ('  ' * ind, g['lab'][:28], len(g['m']), len(ks),
+    def walk(gs, ind, d):
+        for g in gs:
+            ks = g['keys']
+            print('%s%-30s %6d variables  %d key%s: %s%s' % ('  ' * ind, g['name'][:30], g['size'], len(ks),
                   '' if len(ks) == 1 else 's', ', '.join(ks[:6]), ', ...' if len(ks) > 6 else ''))
-            if g.get('ch') and d < depth:
-                walk(g['ch'], ind + 1, d + 1)
-    walk(G['tree'], 0, 1)
+            if g.get('groups') and d < depth:
+                walk(g['groups'], ind + 1, d + 1)
+    walk(groups, 0, 1)
 
 
 def _esc(s):
@@ -1573,9 +1902,10 @@ table{border-collapse:collapse;width:100%;font-size:13px}th,td{border-bottom:1px
 </style></head><body>
 <header><h1>Model map: __TITLE__</h1><div class="hint" id="sub"></div></header>
 <main>
-<div class="ctl"><label>View <select id="mby"><option value="fold">all variables, unfold step by step</option><option value="route">main chain, zoomable</option></select></label>
+<div class="ctl"><label>View <select id="mby"><option value="fold">all variables, unfold step by step</option><option value="route">main chain, zoomable</option><option value="trace">around a variable</option></select></label>
  <span id="mcf"><button class="btn" id="ffold">fold all</button> <button class="btn" id="fone">unfold one more level</button></span>
- <input type="text" id="find" placeholder="find a variable, e.g. FGDP$.IUSA" style="min-width:250px"> <span id="findn" class="hint"></span>
+ <span id="mct">feeding it: <select id="tu"><option>0</option><option>1</option><option selected>2</option><option>3</option><option>4</option></select> steps · fed by it: <select id="td"><option>0</option><option>1</option><option selected>2</option><option>3</option><option>4</option></select> steps</span>
+ <span style="position:relative"><input type="text" id="find" placeholder="find a variable by name or description" style="min-width:290px" autocomplete="off"><div id="fl" style="position:absolute;z-index:4;top:32px;left:0;min-width:420px;max-height:340px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);display:none"></div></span> <span id="findn" class="hint"></span>
  <span class="zb"><button class="btn" data-z="in">+</button><button class="btn" data-z="out">−</button><button class="btn" data-z="reset">reset view</button></span></div>
 <div class="hint" id="hint"></div>
 <div class="small" id="crumb" style="margin:6px 0"></div>
@@ -1593,7 +1923,8 @@ const D=__DATA__;
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const N=D.nodes.length,NI={};D.nodes.forEach((n,i)=>NI[n]=i);const CH=D.nodes.map(()=>[]);D.par.forEach((ps,v)=>ps.forEach(u=>CH[u].push(v)));
 const HAS=!!D.gap,gapOf=i=>HAS&&D.gap[i]?D.gap[i][0]:null,pct=v=>v==null?'–':(v>0?'+':'')+(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2))+'%',cls=v=>v==null?'':v<0?'neg':v>0?'pos':'';
-const vlink=i=>`<a href="#" data-vi="${i}">${esc(D.nodes[i])}</a>`;
+const descOf=i=>D.desc?D.desc[i]||'':'';
+const vlink=i=>`<a href="#" data-vi="${i}" title="${esc(descOf(i))}">${esc(D.nodes[i])}</a>`;
 const fillOf=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
 const M=D.meta;$('#sub').textContent=`${N.toLocaleString()} variables, ${M.n_eq.toLocaleString()} equations from ${M.eq_files.join(', ')}${HAS?` · colours: gap B − A at the end (B: ${M.b.join(', ')}; A: ${M.a.join(', ')})`:''}${M.n_fail?` · ${M.n_fail} lines could not be read`:''} · made ${M.generated}`;
 if(!HAS){$('#thch').style.display='none';$('#thg').style.display='none'}
@@ -1648,7 +1979,7 @@ function drawFold(){$('#hint').innerHTML=`<b>All variables, unfold step by step.
   if(it.g){const g=it.g,ch=changed(g),can=!!(g.ch||g.m.length>1);
    nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables${HAS?` (${ch} changed)`:''}${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,10).map(i=>D.nodes[i]).join(', ')}${g.k.length>10?', …':''}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(g.lab.length>19?g.lab.slice(0,18)+'…':g.lab)} · ${g.m.length.toLocaleString()}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${HAS?ch.toLocaleString()+' changed · ':''}${g.k.length} key${g.k.length===1?'':'s'}${can?' · ▸ unfold':''}</text></g>`}
   else{const i=it.v,n=D.nodes[i],g=gapOf(i),key=it.parent&&it.parent.k.includes(i),hl=HL===i;
-   nd+=`<g class="fv" data-i="${i}" data-d="${d}" style="cursor:pointer"><title>${esc(n)}${HAS?(g!=null?`: gap ${pct(g)}`:': unchanged'):''}${it.parent?` (in ${it.parent.lab})`:''}${key?', key variable of its group':''}. Click for its equation and links.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${fillOf(g)}" stroke="${hl?'var(--b)':'var(--line)'}" stroke-width="${hl?3:1}"/>${stripe}<text x="${p.x+11}" y="${p.y+18}" font-size="11" fill="var(--fg)">${key?'🔑 ':''}${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
+   nd+=`<g class="fv" data-i="${i}" data-d="${d}" style="cursor:pointer"><title>${esc(n)}${descOf(i)?' — '+esc(descOf(i)):''}${HAS?(g!=null?`: gap ${pct(g)}`:': unchanged'):''}${it.parent?` (in ${it.parent.lab})`:''}${key?', key variable of its group':''}. Click for its equation and links.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${fillOf(g)}" stroke="${hl?'var(--b)':'var(--line)'}" stroke-width="${hl?3:1}"/>${stripe}<text x="${p.x+11}" y="${p.y+18}" font-size="11" fill="var(--fg)">${key?'🔑 ':''}${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
  VS.full=[0,0,W,H+10];VS.v=VS.full.slice();const cw=$('main').clientWidth||1100,w=Math.min(cw,Math.round(W*1.05));
  $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${w}px;max-width:100%;height:${Math.round(Math.min(780,Math.max(160,w*(H+10)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mk" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${ed}${nd}</svg>`;
  const sv=$('#sv');panZoom(sv);
@@ -1702,7 +2033,7 @@ function drawRoute(){$('#hint').innerHTML=`<b>Main chain, zoomable</b>, like dir
  let nd='';items.forEach((it,i)=>{const p=P[i];
   if(it.k!=='step'){nd+=`<g><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--bg)" stroke="var(--mut)" stroke-dasharray="5 4"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">${it.k==='prev'?'from the step before':'on to the next step'}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" fill="var(--fg)">${esc(it.lab.length>24?it.lab.slice(0,23)+'…':it.lab)}</text></g>`;return}
   const c=kids[it.x];
-  if(c.v!=null){const n=D.nodes[c.v],g=gapOf(c.v);nd+=`<g class="rv" data-i="${c.v}" style="cursor:pointer"><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${fillOf(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
+  if(c.v!=null){const n=D.nodes[c.v],g=gapOf(c.v);nd+=`<g class="rv" data-i="${c.v}" style="cursor:pointer"><title>${esc(n)}${descOf(c.v)?' — '+esc(descOf(c.v)):''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${fillOf(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
   else{const more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1}${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="12" font-weight="600" fill="var(--fg)">${esc(c.lab.length>17?c.lab.slice(0,16)+'…':c.lab)} · ${c.m.length.toLocaleString()}</text></g>`}});
  VS.full=[0,0,W,H];VS.v=VS.full.slice();
  $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${Math.min(($('main').clientWidth||1100),W)}px;max-width:100%;height:${Math.round(Math.min(700,H*Math.min(1,($('main').clientWidth||1100)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--a)"/></marker></defs>${ed}${nd}</svg>`;
@@ -1711,27 +2042,62 @@ function drawRoute(){$('#hint').innerHTML=`<b>Main chain, zoomable</b>, like dir
  sv.addEventListener('click',e=>{const v=e.target.closest('.rv');if(v){showVar(+v.dataset.i);return}const g=e.target.closest('.rg');if(!g)return;const j=+g.dataset.j,c=kids[ch[j]];if(!(c.ch||c.m.length>1))return;
   const bf=j>0?kids[ch[j-1]]:null,af=j<ch.length-1?kids[ch[j+1]]:null,lab=x=>x.v!=null?D.nodes[x.v]:x.lab;
   RP.push({node:c,lab:`step ${j+1}: ${c.lab}`,prev:bf?new Set(bf.m):cur.prev,prevLab:bf?lab(bf):cur.prevLab,next:af?new Set(af.m):cur.next,nextLab:af?lab(af):cur.nextLab});draw()})}
-function draw(){const m=$('#mby').value;$('#mcf').style.display=m==='fold'?'':'none';m==='fold'?drawFold():drawRoute()}
+// ---------- around a variable: what feeds it and what it feeds, a few steps each way
+let TR=null;
+function drawTrace(){$('#hint').innerHTML=`<b>Around a variable.</b> The variable in the middle, the variables that feed it on the left (1, 2, … equations away) and the variables it feeds on the right. Click a box for its equation and links; double-click to put it in the middle. Choose a variable with the search box or from its panel.`;$('#crumb').innerHTML='';$('#chain').innerHTML='';
+ if(TR==null){let b=0;for(let i=1;i<N;i++)if(CH[i].length+D.par[i].length>CH[b].length+D.par[b].length)b=i;TR=b}
+ const du=+$('#tu').value,dd=+$('#td').value,dist=new Map([[TR,0]]),cap=260;
+ const bfs=(nb,lim,sign)=>{let fr=[TR];for(let k=1;k<=lim;k++){const nx=[];for(const u of fr)for(const v of nb[u])if(!dist.has(v)){dist.set(v,sign*k);nx.push(v)}fr=nx;if(dist.size>cap)break}};
+ bfs(D.par,du,-1);bfs(CH,dd,1);
+ let ids=[...dist.keys()];const cut=ids.length>cap;if(cut)ids=ids.sort((a,b)=>Math.abs(dist.get(a))-Math.abs(dist.get(b))||Math.abs(gapOf(b)||0)-Math.abs(gapOf(a)||0)).slice(0,cap);
+ const S=new Set(ids),cols=new Map();ids.forEach(i=>{const c=dist.get(i);if(!cols.has(c))cols.set(c,[]);cols.get(c).push(i)});
+ const cks=[...cols.keys()].sort((a,b)=>a-b),BW=176,BH=30,GX=70,SX=12,GY=8,R=Math.max(10,Math.min(30,Math.ceil(Math.sqrt(ids.length)*1.4)));
+ cks.forEach(c=>cols.get(c).sort((a,b)=>Math.abs(gapOf(b)||0)-Math.abs(gapOf(a)||0)||(D.nodes[a]<D.nodes[b]?-1:1)));
+ const nsub=new Map(),x0=new Map();let xc=10;cks.forEach(c=>{nsub.set(c,Math.max(1,Math.ceil(cols.get(c).length/R)));x0.set(c,xc);xc+=nsub.get(c)*(BW+SX)-SX+GX});
+ const P=new Map();let H=0;cks.forEach(c=>{const a=cols.get(c),rk=Math.ceil(a.length/nsub.get(c));a.forEach((i,r)=>{const s=Math.floor(r/rk);P.set(i,{x:x0.get(c)+s*(BW+SX),y:24+(r%rk)*(BH+GY)});H=Math.max(H,24+((r%rk)+1)*(BH+GY))})});
+ const W=xc-GX+20;let ed='';const E=[];ids.forEach(v=>D.par[v].forEach(u=>{if(S.has(u))E.push([u,v])}));const EO=Math.max(.12,Math.min(.45,30/Math.max(1,E.length))).toFixed(2);
+ E.forEach(([u,v])=>{const A=P.get(u),B=P.get(v),x1=A.x+BW,y1=A.y+BH/2,y2=B.y+BH/2;let d;if(x1<B.x){const m=(x1+B.x)/2;d=`M${x1},${y1} C${m},${y1} ${m},${y2} ${B.x},${y2}`}else{const bx=Math.max(x1,B.x+BW)+24;d=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${B.x+BW},${y2}`}
+  ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity="${EO}" marker-end="url(#mt)" data-e="${u},${v}"/>`});
+ const hd=cks.map(c=>`<text x="${x0.get(c)}" y="14" font-size="11" fill="var(--mut)">${c===0?'the variable':c<0?`feeds it, ${-c} step${c===-1?'':'s'} away`:`fed by it, ${c} step${c===1?'':'s'} away`} (${cols.get(c).length})</text>`).join('');
+ let nd='';ids.forEach(i=>{const p=P.get(i),n=D.nodes[i],g=gapOf(i),f=i===TR;nd+=`<g class="tv" data-i="${i}" style="cursor:pointer"><title>${esc(n)}${descOf(i)?' — '+esc(descOf(i)):''}${HAS?(g!=null?`: gap ${pct(g)}`:': unchanged'):''}. Click for details, double-click to put it in the middle.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="6" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="6" fill="${fillOf(g)}" stroke="${f?'var(--b)':'var(--line)'}" stroke-width="${f?3:1}"/><text x="${p.x+8}" y="${p.y+19}" font-size="11.5" font-weight="${f?700:400}" fill="var(--fg)">${esc(n.length>21?n.slice(0,20)+'…':n)}${HAS&&g!=null?` <tspan font-size="10.5" fill="var(--mut)">${pct(g)}</tspan>`:''}</text></g>`});
+ VS.full=[0,0,W,H+10];VS.v=VS.full.slice();const cw=$('main').clientWidth||1100,w=Math.min(cw,Math.round(W*1.05));
+ $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${w}px;max-width:100%;height:${Math.round(Math.min(760,Math.max(160,w*(H+10)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mt" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${hd}${ed}${nd}</svg>`;
+ const sv=$('#sv');panZoom(sv);
+ sv.addEventListener('mouseover',e=>{const g=e.target.closest('.tv');if(!g)return;const i=g.dataset.i;sv.querySelectorAll('path[data-e]').forEach(p=>{const [u,v]=p.dataset.e.split(',');const on=u===i||v===i;p.setAttribute('stroke',on?'var(--a)':'var(--mut)');p.setAttribute('stroke-opacity',on?'.9':EO)})});
+ sv.addEventListener('click',e=>{const g=e.target.closest('.tv');if(g)showVar(+g.dataset.i)});
+ sv.addEventListener('dblclick',e=>{const g=e.target.closest('.tv');if(g){TR=+g.dataset.i;draw()}});
+ const nu=ids.filter(i=>dist.get(i)<0).length,ndn=ids.filter(i=>dist.get(i)>0).length;
+ $('#note').innerHTML=`<b>${esc(D.nodes[TR])}</b>${descOf(TR)?' — '+esc(descOf(TR)):''}: ${nu} variable${nu===1?'':'s'} feeding it within ${du} step${du===1?'':'s'}, ${ndn} fed by it within ${dd}.${cut?` Showing the ${cap} closest.`:''}`}
+function draw(){const m=$('#mby').value;$('#mcf').style.display=m==='fold'?'':'none';$('#mct').style.display=m==='trace'?'':'none';m==='fold'?drawFold():m==='trace'?drawTrace():drawRoute()}
+$('#tu').onchange=$('#td').onchange=()=>draw();
 $('#mby').onchange=()=>{RP=[];draw()};
 // ---------- one variable: equation, links, place in the groups
 function showVar(i){const n=D.nodes[i],pa=PATH.get(i)||[],g=gapOf(i),ps=D.par[i],cs=CH[i];
  $('#panel').innerHTML=`<span class="x" id="px">×</span><h2 style="margin-top:0">${esc(n)}</h2>
- <div class="small">${pa.map(x=>esc(x.lab)).join(' › ')||'(not linked)'}</div>
+ ${descOf(i)?`<div style="margin:-4px 0 6px">${esc(descOf(i))}</div>`:''}<div class="small">${pa.map(x=>esc(x.lab)).join(' › ')||'(not linked)'}</div>
  ${HAS?`<p>Gap B − A: <b class="${cls(g)}">${g==null?'unchanged':pct(g)}</b> at the end${D.gap[i]?`, largest ${pct(D.gap[i][1])}`:''}</p>`:''}
  <p class="small">Layers: <b>${D.lay[i]}</b> (longest chain of equations downstream)${D.lp[i]>1?` · in a loop of ${D.lp[i]} variables`:''}${D.ex[i]?' · treated as exogenous (--exog)':''}</p>
  ${D.eq[i]?`<pre>${esc(D.eq[i])}</pre>`:`<p class="hint">No equation: an input to the model.</p>`}
  <p><b>Uses</b> (${ps.length}): ${ps.slice(0,60).map(vlink).join(', ')||'–'}${ps.length>60?' …':''}</p>
  <p><b>Used by</b> (${cs.length}): ${cs.slice(0,60).map(vlink).join(', ')||'–'}${cs.length>60?' …':''}</p>
- <button class="btn" id="pfind">show it in the map</button>`;
- $('#panel').style.display='block';$('#px').onclick=()=>$('#panel').style.display='none';$('#pfind').onclick=()=>findVar(i)}
+ <button class="btn" id="pfind">show it in the map</button> <button class="btn" id="ptrace">around it: what feeds it, what it feeds</button>`;
+ $('#panel').style.display='block';$('#px').onclick=()=>$('#panel').style.display='none';$('#pfind').onclick=()=>findVar(i);$('#ptrace').onclick=()=>{TR=i;$('#mby').value='trace';$('#panel').style.display='none';draw()}}
 document.addEventListener('click',e=>{const a=e.target.closest('[data-vi]');if(a){e.preventDefault();showVar(+a.dataset.vi)}});
-function findVar(i){const pa=PATH.get(i);if(!pa){$('#findn').textContent='not in any group';return}$('#mby').value='fold';RP=[];pa.forEach(g=>{if(g.ch||g.m.length>1)FOLD.add(g)});HL=i;draw();
+function findVar(i){if($('#mby').value==='trace'){TR=i;draw();return}const pa=PATH.get(i);if(!pa){$('#findn').textContent='not in any group';return}$('#mby').value='fold';RP=[];pa.forEach(g=>{if(g.ch||g.m.length>1)FOLD.add(g)});HL=i;draw();
  $('#findn').textContent=pa.map(g=>g.lab).join(' › ');const b=document.querySelector(`#sv .fv[data-i="${i}"] rect:nth-child(3)`);if(b){const r=b.getBBox();VS.v=[r.x-450,r.y-250,900+r.width,500];$('#sv').setAttribute('viewBox',VS.v.join(' '));$('#map').scrollIntoView({block:'start'})}}
-$('#find').addEventListener('change',()=>{const q=$('#find').value.trim().toUpperCase();if(!q)return;let i=NI[q];if(i==null){const h=D.nodes.findIndex(n=>n.includes(q));i=h<0?null:h}if(i==null){$('#findn').textContent='not found';return}findVar(i);showVar(i)});
+function matches(q){q=q.trim();if(!q)return[];const Q=q.toUpperCase(),ql=q.toLowerCase(),out=[];const ex=NI[Q];if(ex!=null)out.push(ex);
+ for(let i=0;i<N&&out.length<40;i++){if(i===ex)continue;if(D.nodes[i].includes(Q))out.push(i)}
+ if(D.desc)for(let i=0;i<N&&out.length<40;i++){if(out.includes(i))continue;if((D.desc[i]||'').toLowerCase().includes(ql))out.push(i)}return out}
+function pick(i){$('#fl').style.display='none';findVar(i);showVar(i)}
+$('#find').addEventListener('input',()=>{const ms=matches($('#find').value);const fl=$('#fl');if(!ms.length){fl.style.display=$('#find').value.trim()?'block':'none';fl.innerHTML='<div class="hint" style="padding:8px">no match</div>';return}
+ fl.innerHTML=ms.map(i=>`<div data-pick="${i}" style="padding:5px 9px;cursor:pointer;border-bottom:1px solid var(--line)"><b>${esc(D.nodes[i])}</b> ${descOf(i)?`<span class="hint">${esc(descOf(i).slice(0,80))}</span>`:''}${HAS&&gapOf(i)!=null?` <span class="${cls(gapOf(i))} small">${pct(gapOf(i))}</span>`:''}</div>`).join('')+(ms.length>=40?'<div class="hint" style="padding:6px 9px">first 40 matches; type more to narrow</div>':'');fl.style.display='block'});
+$('#find').addEventListener('keydown',e=>{if(e.key==='Enter'){const ms=matches($('#find').value);if(ms.length)pick(ms[0]);else $('#findn').textContent='not found'}if(e.key==='Escape')$('#fl').style.display='none'});
+$('#fl').addEventListener('click',e=>{const d=e.target.closest('[data-pick]');if(d)pick(+d.dataset.pick)});
+document.addEventListener('click',e=>{if(!e.target.closest('#fl')&&e.target.id!=='find')$('#fl').style.display='none'});
 // ---------- table of all variables, folded by group
 (function(){const tb=$('#ttb'),ST=new Map(),stat=g=>{if(ST.has(g))return ST.get(g);let ch=0,lay=0;for(const i of g.m){if(HAS&&D.gap[i])ch++;if(D.lay[i]>lay)lay=D.lay[i]}const o={ch,lay};ST.set(g,o);return o};
  const rowG=(g,d,pid)=>{const s=stat(g);return `<tr data-id="${g.__f}" data-p="${pid}" data-d="${d}" class="tg"><td style="padding-left:${6+d*18}px;white-space:nowrap"><span class="tg_" style="cursor:pointer;display:inline-block;width:14px">▸</span><b>${esc(g.lab)}</b></td><td class="n">${g.m.length.toLocaleString()}</td>${HAS?`<td class="n">${s.ch.toLocaleString()}</td><td></td>`:''}<td class="n">${g.k.length||'–'}</td><td class="n">${s.lay}</td></tr>`};
- const rowV=(i,d,pid,ks)=>{const g=gapOf(i);return `<tr data-p="${pid}" data-d="${d}"><td style="padding-left:${20+d*18}px">${ks.has(i)?'🔑 ':''}${vlink(i)}</td><td></td>${HAS?`<td class="n">${D.gap[i]?'yes':''}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td>`:''}<td></td><td class="n">${D.lay[i]}</td></tr>`};
+ const rowV=(i,d,pid,ks)=>{const g=gapOf(i);return `<tr data-p="${pid}" data-d="${d}"><td style="padding-left:${20+d*18}px">${ks.has(i)?'🔑 ':''}${vlink(i)}${descOf(i)?` <span class="hint">${esc(descOf(i).slice(0,70))}</span>`:''}</td><td></td>${HAS?`<td class="n">${D.gap[i]?'yes':''}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td>`:''}<td></td><td class="n">${D.lay[i]}</td></tr>`};
  const open=id=>{const g=BYF.get(id),tr=tb.querySelector(`tr[data-id="${id}"]`);if(!g||!tr||tr.dataset.open)return;tr.dataset.open='1';tr.querySelector('.tg_').textContent='▾';const d=+tr.dataset.d+1;
   tr.insertAdjacentHTML('afterend',g.ch?g.ch.map(c=>rowG(c,d,id)).join(''):g.m.slice().sort((a,b)=>Math.abs(gapOf(b)||0)-Math.abs(gapOf(a)||0)||(D.nodes[a]<D.nodes[b]?-1:1)).map(i=>rowV(i,d,id,new Set(g.k))).join(''))};
  const close=id=>{const tr=tb.querySelector(`tr[data-id="${id}"]`);if(!tr)return;delete tr.dataset.open;tr.querySelector('.tg_').textContent='▸';const kill=[id];for(let x=0;x<kill.length;x++)tb.querySelectorAll(`tr[data-p="${kill[x]}"]`).forEach(r=>{if(r.dataset.id)kill.push(r.dataset.id);r.remove()})};
@@ -1745,7 +2111,11 @@ draw();
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--eq', action='append', required=True, help='equation file(s) or folder (repeatable)')
+    p.add_argument('--eq', action='append', help='equation file(s) or folder (repeatable)')
+    p.add_argument('--links', action='append', help='instead of equations: csv/xlsx of links with from/to columns')
+    p.add_argument('--desc', help='csv/xlsx of variable descriptions (name, description)')
+    p.add_argument('--json', help='also write groups, layers, links and gaps as JSON')
+    p.add_argument('--csv', help='also write every variable with its group path as CSV')
     p.add_argument('--eq-extra', action='append', help='more equations that override --eq (e.g. a second model version)')
     p.add_argument('--a', action='append', help='optional: scenario A data (csv/xlsx), to colour boxes by the gap')
     p.add_argument('--b', action='append', help='optional: scenario B data (csv/xlsx)')
@@ -1757,11 +2127,13 @@ def main(argv=None):
     p.add_argument('--groups', action='store_true', help='also print the group tree in the terminal')
     p.add_argument('--depth', type=int, default=2, help='levels of the group tree to print')
     p.add_argument('--title', help='title of the page')
-    p.add_argument('-o', '--out', default='model_map.html')
+    p.add_argument('-o', '--out', help='HTML page to write (default model_map.html)')
     p.add_argument('-q', '--quiet', action='store_true')
     args = p.parse_args(argv)
     if bool(args.a) != bool(args.b):
         p.error('give both --a and --b, or neither')
+    if not args.eq and not args.links:
+        p.error('give --eq (equation files) or --links (a table of links)')
     build(args)
     return 0
 
