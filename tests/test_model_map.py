@@ -129,6 +129,24 @@ class TestOutputs(unittest.TestCase):
             self.assertGreater(m.summary()['variables'], 300)
 
 
+class TestData(unittest.TestCase):
+    def test_every_sheet_and_empty_series(self):
+        d = os.path.join(HERE, 'data')
+        m = mm.ModelMap.from_equations([os.path.join(d, 'multi_eq.txt')])
+        m.add_scenarios([os.path.join(d, 'multi_a.xlsx')], [os.path.join(d, 'multi_b.xlsx')])
+        # FGDP.ICAN is only on the second data sheet, FEMPTY.ICAN has no numbers: both must be in the map
+        self.assertIn('FGDP.ICAN', m.nodes)
+        self.assertIn('FEMPTY.ICAN', m.nodes)
+        self.assertIn('FGDP.ICAN', m.gap)
+        lines = []
+        self.assertTrue(mm.find_variable('fgdp.ican', [os.path.join(d, 'multi_eq.txt')],
+                                         [os.path.join(d, 'multi_a.xlsx')], [], out=lines.append))
+        self.assertTrue(any('sheet Canada' in x for x in lines))
+        self.assertFalse(mm.find_variable('FGDP.CAN', [], [os.path.join(d, 'multi_a.xlsx')], [], out=lines.append))
+        self.assertIn('FGDP.ICAN', lines[-1])
+
+
+
 def mm_args(argv):
     import argparse
     ns = {}

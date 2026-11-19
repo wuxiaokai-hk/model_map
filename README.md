@@ -70,6 +70,22 @@ python model_map.py --eq large_model/equations.txt --a large_model/baseline.csv 
 
 On the 20,000-series model the map is built in about 5 seconds as a 3.5 MB page. The page opens in under half a second, and each click takes about 0.2 seconds.
 
+## A variable is missing from the map?
+
+```bash
+python model_map.py --eq model.txt --a base.xlsx --b scen.xlsx --find FGDP$.ICAN
+```
+
+This shows where the name appears and what happened to it:
+- the equation lines that mention it;
+- each data file, sheet, row and column where it appears, and how many numbers that row has;
+- whether it was loaded, with the reader's notes for each sheet;
+- if it's nowhere, the closest names (e.g. a typo, or a different separator).
+
+`--unread` lists equation lines that could not be read.
+
+Every sheet of an Excel file is read; sheets without dates (notes, metadata) are skipped and listed. A series with no numbers is still shown in the map, just without a gap.
+
 ## Tests
 
 ```bash

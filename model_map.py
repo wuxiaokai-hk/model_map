@@ -266,6 +266,13 @@ def read_xlsx(path, sheet=None):
     return grid
 
 
+def xlsx_sheets(path):
+    """Names of the worksheets of an .xlsx file, in order."""
+    with zipfile.ZipFile(path) as z:
+        wb = ET.fromstring(z.read('xl/workbook.xml'))
+        return [s.get('name') for s in wb.iter(_NS + 'sheet')]
+
+
 def read_grid(path, sheet=None):
     """Return (rows, is_xlsx)."""
     ext = os.path.splitext(path)[1].lower()
@@ -308,6 +315,7 @@ class Scenario:
         self.keys = {}          # sortkey -> label
         self.notes = []
         self.dups = 0
+        self.keep_empty = False
 
     def put(self, name, bid, arr, desc=''):
         name = name.strip().upper()
@@ -413,7 +421,7 @@ def _ingest_rows(sc, grid, i, cols, path):
             continue
         L = len(r)
         arr = array('d', (_num(r[j]) if j < L else NAN for j in jlist))
-        if all(_isnan(v) for v in arr):
+        if all(_isnan(v) for v in arr) and not sc.keep_empty:
             continue
         desc = _clean(r[desccol]) if desccol is not None and desccol < L else ''
         sc.put(name, bid, arr, desc)
@@ -456,7 +464,7 @@ def _ingest_cols(sc, grid, c, idx, path):
         if not name:
             continue
         arr = array('d', (_num(r[j]) if j < len(r) else NAN for r in rows))
-        if all(_isnan(v) for v in arr):
+        if all(_isnan(v) for v in arr) and not sc.keep_empty:
             continue
         sc.put(name, bid, arr, _clean(descs[j]) if j < len(descs) else '')
         n += 1
@@ -483,11 +491,29 @@ def _ingest_long(sc, grid, h, scol, dcol, vcol, serial, path):
     sc.notes.append('%s: long format (series, date, value), %d series' % (os.path.basename(path), len(data)))
 
 
-def load_scenario(paths, label, sheet=None):
+def load_scenario(paths, label, sheet=None, keep_empty=True):
+    """Read scenario data. For an .xlsx with no sheet named, every sheet with a row or column of dates is
+    read; sheets without dates (notes, metadata) are skipped and listed in sc.notes."""
     sc = Scenario(label)
+    sc.keep_empty = keep_empty
     for p in paths:
-        grid, serial = read_grid(p, sheet)
-        _ingest(sc, grid, serial, p)
+        if sheet is None and os.path.splitext(p)[1].lower() in ('.xlsx', '.xlsm'):
+            names = xlsx_sheets(p)
+            read = 0
+            for k, nm in enumerate(names):
+                grid, serial = read_xlsx(p, k + 1), True
+                if not any(any(_clean(c) for c in r) for r in grid):
+                    continue
+                try:
+                    _ingest(sc, grid, serial, '%s [%s]' % (p, nm))
+                    read += 1
+                except (SystemExit, ValueError) as e:
+                    sc.notes.append('%s: sheet %r skipped (%s)' % (os.path.basename(p), nm, str(e).split(': ', 1)[-1][:80]))
+            if not read:
+                raise SystemExit('%s: no sheet with a row or column of dates' % p)
+        else:
+            grid, serial = read_grid(p, sheet)
+            _ingest(sc, grid, serial, p)
     if sc.dups:
         sc.notes.append('%d duplicate series names (last one kept)' % sc.dups)
     return sc
@@ -1823,6 +1849,89 @@ class ModelMap:
         return path
 
 
+def find_variable(name, eq_paths=(), a_paths=(), b_paths=(), link_paths=(), out=print):
+    """Explain where a variable is: in which equation lines, in which data file/sheet/row/column, whether it
+    was loaded, and the closest names if it is nowhere. For "why is X not in my map?"."""
+    import difflib
+    q = name.strip().upper()
+    out('Looking for %s' % q)
+    loaded = set()
+    # equations
+    if eq_paths:
+        eqs, _, _, fails = load_equations(list(eq_paths))
+        loaded.update(eqs)
+        hits = 0
+        files = []
+        for pth in eq_paths:
+            if os.path.isdir(pth):
+                for root, _, fs in os.walk(pth):
+                    files += [os.path.join(root, f) for f in sorted(fs) if os.path.splitext(f)[1].lower() in EQ_EXT]
+            else:
+                files.append(pth)
+        rx = re.compile(r'(?<![\w$.@%#])' + re.escape(q) + r'(?![\w$.%#])', re.I)
+        for f in files:
+            if os.path.splitext(f)[1].lower() in ('.xlsx', '.xlsm', '.csv'):
+                continue
+            with open(f, 'r', encoding='utf-8-sig', errors='replace') as fh:
+                for k, ln in enumerate(fh, 1):
+                    if rx.search(ln):
+                        hits += 1
+                        if hits <= 12:
+                            out('  equations  %s line %d: %s' % (os.path.basename(f), k, ln.strip()[:150]))
+        if q in eqs:
+            e = eqs[q]
+            out('  -> has an equation%s; it uses %d variables' % ('' if e.evaluable else ' (could not be fully read: %s)' % e.why,
+                                                              len(e.drivers)))
+        users = [n for n, e in eqs.items() if q in e.drivers]
+        for n, e in eqs.items():
+            loaded.update(e.drivers)
+        if users:
+            out('  -> used in the equations of %d variables, e.g. %s' % (len(users), ', '.join(sorted(users)[:6])))
+        if not hits:
+            out('  not in the equation files')
+        elif q not in eqs and not users:
+            out('  -> appears in the equation files but not as a variable the reader picked up '
+                '(check that line with: python model_map.py --eq ... --unread)')
+    # data
+    for label, paths in (('A', a_paths), ('B', b_paths)):
+        for pth in paths or ():
+            ext = os.path.splitext(pth)[1].lower()
+            sheets = list(enumerate(xlsx_sheets(pth), 1)) if ext in ('.xlsx', '.xlsm') else [(None, None)]
+            found = 0
+            for k, nm in sheets:
+                grid = read_xlsx(pth, k) if k else read_grid(pth)[0]
+                for r, row in enumerate(grid, 1):
+                    for c, cell in enumerate(row, 1):
+                        v = _clean(cell) if cell is not None else ''
+                        if v and v.strip().upper() == q:
+                            found += 1
+                            vals = [x for x in row[c:c + 400] if x not in (None, '') and not _isnan(_num(x))]
+                            out('  data %s  %s%s row %d column %d: %r%s, %d numbers on that row' % (
+                                label, os.path.basename(pth), (' [sheet %s]' % nm) if nm else '', r, c, v,
+                                '' if v == q else ' (spaces or case differ)', len(vals)))
+            if not found:
+                out('  data %s  not in %s' % (label, os.path.basename(pth)))
+        if paths:
+            sc = load_scenario(list(paths), label)
+            loaded.update(sc.series)
+            if q in sc.series:
+                out('  -> loaded from scenario %s' % label)
+            else:
+                out('  -> NOT loaded from scenario %s. The reader notes:' % label)
+                for nt in sc.notes:
+                    out('       ' + nt)
+    for pth in link_paths or ():
+        m = ModelMap.from_links_csv(pth)
+        loaded.update(m.names)
+        out('  links  %s: %s' % (os.path.basename(pth), 'found' if q in m.names else 'not found'))
+    if q in loaded:
+        out('=> %s is in the map. In the page, type it in the search box.' % q)
+    else:
+        close = difflib.get_close_matches(q, sorted(loaded), n=6, cutoff=0.75)
+        out('=> %s is not in the map.%s' % (q, (' Closest names: ' + ', '.join(close)) if close else ''))
+    return q in loaded
+
+
 def build(args):
     """Command line: build a ModelMap from the arguments and write what was asked for."""
     say = (lambda m: None) if args.quiet else (lambda m: print(m, file=sys.stderr))
@@ -2085,13 +2194,14 @@ function showVar(i){const n=D.nodes[i],pa=PATH.get(i)||[],g=gapOf(i),ps=D.par[i]
 document.addEventListener('click',e=>{const a=e.target.closest('[data-vi]');if(a){e.preventDefault();showVar(+a.dataset.vi)}});
 function findVar(i){if($('#mby').value==='trace'){TR=i;draw();return}const pa=PATH.get(i);if(!pa){$('#findn').textContent='not in any group';return}$('#mby').value='fold';RP=[];pa.forEach(g=>{if(g.ch||g.m.length>1)FOLD.add(g)});HL=i;draw();
  $('#findn').textContent=pa.map(g=>g.lab).join(' › ');const b=document.querySelector(`#sv .fv[data-i="${i}"] rect:nth-child(3)`);if(b){const r=b.getBBox();VS.v=[r.x-450,r.y-250,900+r.width,500];$('#sv').setAttribute('viewBox',VS.v.join(' '));$('#map').scrollIntoView({block:'start'})}}
+const NOTFOUND=q=>`No variable matches “${esc(q.trim())}”. It is not in the equations or the data that were read. To see why, run: <code>python model_map.py … --find ${esc(q.trim().toUpperCase())}</code> with the same files.`;
 function matches(q){q=q.trim();if(!q)return[];const Q=q.toUpperCase(),ql=q.toLowerCase(),out=[];const ex=NI[Q];if(ex!=null)out.push(ex);
  for(let i=0;i<N&&out.length<40;i++){if(i===ex)continue;if(D.nodes[i].includes(Q))out.push(i)}
  if(D.desc)for(let i=0;i<N&&out.length<40;i++){if(out.includes(i))continue;if((D.desc[i]||'').toLowerCase().includes(ql))out.push(i)}return out}
 function pick(i){$('#fl').style.display='none';findVar(i);showVar(i)}
-$('#find').addEventListener('input',()=>{const ms=matches($('#find').value);const fl=$('#fl');if(!ms.length){fl.style.display=$('#find').value.trim()?'block':'none';fl.innerHTML='<div class="hint" style="padding:8px">no match</div>';return}
+$('#find').addEventListener('input',()=>{const ms=matches($('#find').value);const fl=$('#fl');if(!ms.length){fl.style.display=$('#find').value.trim()?'block':'none';fl.innerHTML='<div class="hint" style="padding:8px">'+NOTFOUND($('#find').value)+'</div>';return}
  fl.innerHTML=ms.map(i=>`<div data-pick="${i}" style="padding:5px 9px;cursor:pointer;border-bottom:1px solid var(--line)"><b>${esc(D.nodes[i])}</b> ${descOf(i)?`<span class="hint">${esc(descOf(i).slice(0,80))}</span>`:''}${HAS&&gapOf(i)!=null?` <span class="${cls(gapOf(i))} small">${pct(gapOf(i))}</span>`:''}</div>`).join('')+(ms.length>=40?'<div class="hint" style="padding:6px 9px">first 40 matches; type more to narrow</div>':'');fl.style.display='block'});
-$('#find').addEventListener('keydown',e=>{if(e.key==='Enter'){const ms=matches($('#find').value);if(ms.length)pick(ms[0]);else $('#findn').textContent='not found'}if(e.key==='Escape')$('#fl').style.display='none'});
+$('#find').addEventListener('keydown',e=>{if(e.key==='Enter'){const ms=matches($('#find').value);if(ms.length)pick(ms[0]);else $('#findn').innerHTML=NOTFOUND($('#find').value)}if(e.key==='Escape')$('#fl').style.display='none'});
 $('#fl').addEventListener('click',e=>{const d=e.target.closest('[data-pick]');if(d)pick(+d.dataset.pick)});
 document.addEventListener('click',e=>{if(!e.target.closest('#fl')&&e.target.id!=='find')$('#fl').style.display='none'});
 // ---------- table of all variables, folded by group
@@ -2125,6 +2235,9 @@ def main(argv=None):
     p.add_argument('--geo-sep', default='auto', help="separator before geography codes in names: '.', '_' or auto")
     p.add_argument('--no-geo-names', action='store_true', help='do not use geographies to name groups')
     p.add_argument('--groups', action='store_true', help='also print the group tree in the terminal')
+    p.add_argument('--find', action='append', metavar='NAME',
+                   help='explain where a variable is (equations, data file/sheet/row) and why it is or is not in the map')
+    p.add_argument('--unread', action='store_true', help='list equation lines that could not be read')
     p.add_argument('--depth', type=int, default=2, help='levels of the group tree to print')
     p.add_argument('--title', help='title of the page')
     p.add_argument('-o', '--out', help='HTML page to write (default model_map.html)')
@@ -2134,6 +2247,17 @@ def main(argv=None):
         p.error('give both --a and --b, or neither')
     if not args.eq and not args.links:
         p.error('give --eq (equation files) or --links (a table of links)')
+    if args.find:
+        for n in args.find:
+            find_variable(n, args.eq or (), args.a or (), args.b or (), args.links or ())
+            print()
+        return 0
+    if args.unread and args.eq:
+        _, _, _, fails = load_equations(args.eq)
+        print('%d equation lines could not be read%s' % (len(fails), ':' if fails else '.'))
+        for f in fails:
+            print('  ' + f)
+        return 0
     build(args)
     return 0
 
