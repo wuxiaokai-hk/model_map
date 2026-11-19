@@ -116,7 +116,13 @@ Nothing is hard-coded: the groups come from the equation links alone.
    - Too many parts: groups that hang off the same neighbours are put together.
    - No structure at all: the set is cut along the order of its equations.
 4. **Key variables.** For each group, the fewest variables that every link between it and the rest of the model passes through: a minimum vertex cover of its boundary links (König's theorem). A group joined through one or two key variables is almost a separate model hanging off them.
-5. **Names.** Geography codes found in the names (e.g. `ICA`, `_ICAN`) are used only to name groups, such as "ICA" or "IKY + IID + IUSA". Otherwise a group is named after its most-connected variable ("around FGDP$.IUSA"). `--map-geo` splits by geography first instead.
+5. **Names.** Each group is named by what is in it.
+   - **Concepts:** taken from the names, with the geography removed and sector numbers dropped (FEMP29.ICA → FEMP). When the data files have descriptions, those are used instead.
+   - **Regions:** e.g. "FOCC, FEMP, FOUT · ICA", "House price index · 13 regions", "FY · IUSA + 50 regions".
+   - **Mixed groups:** e.g. "6 concepts: Employment, House price index, … · 42 regions".
+
+   Geographies are found in the names automatically and are used only for naming. `--map-geo` splits by geography first instead.
+6. **Add-factor series.** Series like `FGDP.IUSA_A` or `FGDP_A.IUSA` that no equation uses are left out of the map and the table. Each is listed in its variable's panel. The suffix is set with `--af-suffix` (default `_A`; `''` keeps them).
 
 Variables that appear in no equation and have none of their own go in a "(not linked)" box.
 
@@ -145,6 +151,7 @@ N⁻(u) is the number of distinct chains from any input (a variable with no equa
 | `--a FILE`, `--b FILE` | | optional scenario data, to colour boxes by the gap B − A |
 | `--exog NAMES` | | variables to treat as exogenous (names, or a file of names) |
 | `--map-boxes N` | 40 | most boxes in one view; groups get more levels to fit |
+| `--af-suffix` | `_A` | add-factor series (`X_A`, `STEM_A.GEO`) that no equation uses are shown with their variable, not as boxes; `''` keeps them |
 | `--map-geo` | off | split by geography first instead of by links |
 | `--geo-sep` | auto | separator before geography codes in names: `.`, `_` or auto |
 | `--no-geo-names` | off | don't use geographies to name groups |

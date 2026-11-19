@@ -1254,7 +1254,7 @@ def _min_cover(cut):
 
 
 
-def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
+def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False, desc=None):
     """Split the equation graph into a tree of groups, so that no view shows more than `boxes` boxes.
     Each split uses Louvain community detection (dense inside, loose links to the rest), with its
     resolution tuned to give 2 .. ~2/3 boxes parts; too many parts are grouped again; a set with no
@@ -1279,22 +1279,67 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
         for v in c:
             order[v] = x
 
-    def label(mem, plab=None):
+    def fam(i):                                                # concept family: geography and numbers removed
+        n = nodes[i]
+        g = geo(n) if geo else ''
+        st = n[:-(len(g) + 1)] if g else n
+        return re.sub(r'\d+$', '', st) or st
+
+    def dfam(i):                                               # the same from the description, if any
+        d = (desc(nodes[i]) if desc else '') or ''
+        g = geo(nodes[i]) if geo else ''
+        if g:
+            d = re.sub(r'[\s,;:(\-]*%s\)?\s*$' % re.escape(g), '', d, flags=re.I)
+        return re.sub(r'\s*\d+\s*$', '', d).strip(' ,;:-')
+
+    def label(mem, pgeo=None):
+        """What is in the group: its main concepts, then its regions, e.g. 'FEMP, FOUT · ICA',
+        'House price index · 13 regions', 'FY · IUSA + 50 regions'. Returns (label, geography part)."""
+        n = len(mem)
+        gpart = ''
         if geo:
             c = Counter(geo(nodes[i]) for i in mem)
-            g, k = c.most_common(1)[0]
-            if g and k >= 0.6 * len(mem) and g != plab:         # inside one region, name by a variable instead
-                return g
-            top3, cov = [], 0                                  # mostly two or three regions: name them
-            for g2, k2 in c.most_common(3):
-                if not g2 or g2 == plab:
-                    break
-                top3.append(g2)
-                cov += k2
-                if cov >= 0.8 * len(mem):
-                    return ' + '.join(top3)
-        top = max(mem, key=lambda i: (len(nbr[i]), nodes[i]))
-        return 'around ' + nodes[top]
+            codes = [g for g in c if g]
+            g1, k1 = c.most_common(1)[0]
+            if g1 and k1 >= 0.6 * n:
+                gpart = g1
+            elif codes:
+                top, cov = [], 0
+                for g2, k2 in c.most_common(3):
+                    if not g2:
+                        break
+                    top.append(g2)
+                    cov += k2
+                    if cov >= 0.8 * n:
+                        break
+                if top and cov >= 0.8 * n:
+                    gpart = ' + '.join(top)
+                else:
+                    big = [g for g, k in c.most_common(1) if g and k >= 0.2 * n]
+                    gpart = ('%s + %d regions' % (big[0], len(codes) - 1)) if big else '%d regions' % len(codes)
+        fc = Counter(fam(i) for i in mem)
+        fams, cov = [], 0
+        for f, k in fc.most_common(3):
+            fams.append(f)
+            cov += k
+            if cov >= 0.7 * n:
+                break
+
+        def fname(f):
+            if desc:
+                ds = Counter(dfam(i) for i in mem if fam(i) == f)
+                d, k = ds.most_common(1)[0]
+                if d and k >= 0.5 * sum(ds.values()):
+                    return d
+            return f
+        if cov >= 0.7 * n:
+            cpart = ', '.join(fname(f) for f in fams)
+        else:
+            cpart = '%d concepts: %s, …' % (len(fc), ', '.join(fname(f) for f in fams[:2]))
+        if len(cpart) > 44:
+            cpart = cpart[:42].rstrip(', ') + '…'
+        show_g = gpart and gpart != pgeo
+        return (cpart + (' · ' + gpart if show_g else '')), gpart
 
     def keys_of(mem):
         ms = set(mem)
@@ -1362,16 +1407,16 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
             parts = chunk(ms, min(maxp, max(2, -(-len(ms) // boxes))))
         return [sorted(m) for m in parts if m]
 
-    def build(members, depth, plab=None):
+    def build(members, depth, pgeo=None):
         out, seen = [], Counter()
         for mem in sorted(split(members), key=lambda m: (-len(m), nodes[m[0]])):
-            lab = label(mem, plab)
+            lab, gp = label(mem, pgeo)
             seen[lab] += 1
-            if lab == plab or seen[lab] > 1:                    # keep names in a view distinct
-                lab = '%s (%s)' % (lab, 'core' if lab == plab and seen[lab] == 1 else 'part %d' % seen[lab])
+            if seen[lab] > 1:                                  # keep names in a view distinct
+                lab = '%s (%d)' % (lab, seen[lab])
             node = {'m': mem, 'k': keys_of(mem), 'lab': lab}
             if len(mem) > boxes and depth < 30 and len(mem) < len(members):
-                node['ch'] = build(mem, depth + 1, plab if plab and label(mem, plab).startswith('around ') else label(mem, plab))
+                node['ch'] = build(mem, depth + 1, gp or pgeo)
             out.append(node)
         return out
 
@@ -1396,7 +1441,7 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
                 mem = sorted(byg[g])
                 node = {'m': mem, 'k': keys_of(mem), 'lab': g or '(no geography)'}
                 if len(mem) > boxes:
-                    node['ch'] = build(mem, 1, node['lab'])
+                    node['ch'] = build(mem, 1, g)
                 return node
             tree = [gnode(g) for g in hubs]
             room = max(2, maxp - len(tree))
@@ -1511,7 +1556,7 @@ class ModelMap:
     """
 
     def __init__(self, parents, equations=None, descriptions=None, exog=(), boxes=40, by_geo=False,
-                 geo_sep='auto', geo_names=True):
+                 geo_sep='auto', geo_names=True, af_suffix='_A'):
         exog = {str(x).upper() for x in exog}
         par = defaultdict(set)
         for n, ps in dict(parents).items():
@@ -1532,6 +1577,7 @@ class ModelMap:
         self.gap = {}                                          # name -> (gap at end %, largest gap %)
         self.data_files = ([], [])
         self.boxes, self.by_geo, self.geo_sep, self.geo_names = boxes, by_geo, geo_sep, geo_names
+        self.af_suffix = [x.strip().upper() for x in (af_suffix or '').split(',') if x.strip()]
         self.n_equations = len(self.equations) or sum(1 for n in par if par[n])
         self.unread = []
         self._cache = {}
@@ -1626,8 +1672,35 @@ class ModelMap:
     @property
     def nodes(self):
         if 'nodes' not in self._cache:
-            self._cache['nodes'] = sorted(self.names | self._extra)
+            allv = self.names | self._extra
+            af = self.add_factors_of(allv)
+            self._cache['af'] = af
+            drop = {a for v in af.values() for a in v}
+            self._cache['nodes'] = sorted(allv - drop)
         return self._cache['nodes']
+
+    def add_factors_of(self, allv=None):
+        """Add-factor series (e.g. FGDP.IUSA_A or FGDP_A.IUSA for FGDP.IUSA) that no equation uses:
+        {variable: [its add-factor series]}. They are left out of the map and shown with their variable."""
+        if allv is None:
+            return self._cache.get('af') or (self.nodes and self._cache.get('af', {}))
+        used = set()
+        for ps in self._par.values():
+            used.update(ps)
+        out = defaultdict(list)
+        for n in sorted(allv):
+            if n in used or self._par.get(n):
+                continue
+            for sf in self.af_suffix:
+                bases = [n[:-len(sf)]] if n.endswith(sf) else []
+                for sep in ('.', '_'):
+                    if sf + sep in n:
+                        bases.append(n.replace(sf + sep, sep, 1))
+                b = next((x for x in bases if x and x in allv and x != n), None)
+                if b:
+                    out[b].append(n)
+                    break
+        return dict(out)
 
     def _ix(self):
         if 'ix' not in self._cache:
@@ -1714,7 +1787,8 @@ class ModelMap:
         key = ('tree', self.boxes, self.by_geo)
         if key not in self._cache:
             idx, P, C = self._ix()
-            self._cache[key] = compute_groups(self.nodes, P, geo=self._geo()[0], boxes=self.boxes, by_geo=self.by_geo)
+            self._cache[key] = compute_groups(self.nodes, P, geo=self._geo()[0], boxes=self.boxes, by_geo=self.by_geo,
+                                              desc=(self.descriptions.get if self.descriptions else None))
         return self._cache[key]
 
     def groups(self):
@@ -1788,7 +1862,8 @@ class ModelMap:
         L = self.layers()
         return {'variables': len(self.nodes), 'equations': self.n_equations, 'top_groups': len(G),
                 'levels': depth(G), 'boxes_per_view': self.boxes, 'longest_chain': max(L.values(), default=0),
-                'changed': len(self.gap), 'unread_lines': len(self.unread)}
+                'changed': len(self.gap), 'unread_lines': len(self.unread),
+                'add_factor_series_left_out': sum(len(v) for v in (self.add_factors_of() or {}).values())}
 
     def to_json(self, path=None):
         """Groups, layers, links and gaps as JSON (written to `path` if given; the dict is returned)."""
@@ -1834,6 +1909,7 @@ class ModelMap:
             'eq': [str(self.equations.get(n, ''))[:600] for n in nodes],
             'desc': [self.descriptions.get(n, '') for n in nodes] if self.descriptions else None,
             'ex': [1 if n in self.exog else 0 for n in nodes],
+            'af': [self._cache.get('af', {}).get(n) for n in nodes] if self._cache.get('af') else None,
             'gap': [list(self.gap[n]) if n in self.gap else None for n in nodes] if has else None,
             'lay': [L.get(n, (0,))[0] for n in nodes], 'lp': [L.get(n, (0, 0, 0, 0, 1))[4] for n in nodes],
             'cid': cid, 'tree': T['tree'], 'boxes': T['boxes'],
@@ -1936,7 +2012,8 @@ def build(args):
     """Command line: build a ModelMap from the arguments and write what was asked for."""
     say = (lambda m: None) if args.quiet else (lambda m: print(m, file=sys.stderr))
     t0 = time.time()
-    kw = dict(boxes=args.map_boxes, by_geo=args.map_geo, geo_sep=args.geo_sep, geo_names=not args.no_geo_names)
+    kw = dict(boxes=args.map_boxes, by_geo=args.map_geo, geo_sep=args.geo_sep, geo_names=not args.no_geo_names,
+              af_suffix=args.af_suffix)
     if args.links:
         say('Reading links ...')
         m = ModelMap.from_links_csv(args.links[0], **kw)
@@ -1955,8 +2032,10 @@ def build(args):
     if args.desc:
         m.set_descriptions(args.desc)
     S = m.summary()
-    say('%d variables, %d equations, %d groups at the top, %d levels, at most %d boxes per view, longest chain %d'
-        % (S['variables'], S['equations'], S['top_groups'], S['levels'], S['boxes_per_view'], S['longest_chain']))
+    say('%d variables, %d equations, %d groups at the top, %d levels, at most %d boxes per view, longest chain %d%s'
+        % (S['variables'], S['equations'], S['top_groups'], S['levels'], S['boxes_per_view'], S['longest_chain'],
+           ('; %d add-factor series shown with their variables' % S['add_factor_series_left_out'])
+           if S['add_factor_series_left_out'] else ''))
     if args.json:
         m.to_json(args.json)
         say('JSON written: %s' % args.json)
@@ -1979,7 +2058,7 @@ def print_groups(groups, depth):
     def walk(gs, ind, d):
         for g in gs:
             ks = g['keys']
-            print('%s%-30s %6d variables  %d key%s: %s%s' % ('  ' * ind, g['name'][:30], g['size'], len(ks),
+            print('%s%-44s %6d variables  %d key%s: %s%s' % ('  ' * ind, g['name'][:44], g['size'], len(ks),
                   '' if len(ks) == 1 else 's', ', '.join(ks[:6]), ', ...' if len(ks) > 6 else ''))
             if g.get('groups') and d < depth:
                 walk(g['groups'], ind + 1, d + 1)
@@ -2077,7 +2156,7 @@ function drawFold(){$('#hint').innerHTML=`<b>All variables, unfold step by step.
  const cks=[...cols.keys()].sort((a,b)=>a-b),pos=new Map();cks.forEach(c=>{cols.get(c).sort((a,b)=>topOf(a)-topOf(b));cols.get(c).forEach((d,r)=>pos.set(d,r))});
  const pin=new Map();edges.forEach(([u,v])=>{if(!pin.has(v))pin.set(v,[]);pin.get(v).push(u)});
  for(let sw=0;sw<3;sw++)cks.forEach((c,j)=>{if(!j)return;const a=cols.get(c);a.sort((x,y)=>{const m=z=>{const ps=pin.get(z)||[];return ps.length?ps.reduce((s,p)=>s+pos.get(p),0)/ps.length:1e9};return (m(x)-m(y))||(topOf(x)-topOf(y))});a.forEach((d,r)=>pos.set(d,r))});
- const BW=176,BH=28,GH=42,GX=70,SX=12,GY=9,R=Math.max(12,Math.min(36,Math.ceil(Math.sqrt(ids.length)*1.5))),hOf=d=>items.get(d).g?GH:BH;
+ const BW=196,BH=28,GH=42,GX=70,SX=12,GY=9,R=Math.max(12,Math.min(36,Math.ceil(Math.sqrt(ids.length)*1.5))),hOf=d=>items.get(d).g?GH:BH;
  const nsub=new Map(),x0=new Map();let xc=10;cks.forEach(c=>{nsub.set(c,Math.max(1,Math.ceil(cols.get(c).length/R)));x0.set(c,xc);xc+=nsub.get(c)*(BW+SX)-SX+GX});
  const P=new Map();let H=0;cks.forEach(c=>{const a=cols.get(c),rk=Math.ceil(a.length/nsub.get(c)),y=[...Array(nsub.get(c))].map(()=>12);a.forEach((d,r)=>{const s=Math.floor(r/rk);P.set(d,{x:x0.get(c)+s*(BW+SX),y:y[s]});y[s]+=hOf(d)+GY;H=Math.max(H,y[s])})});
  const W=xc-GX+20,EO=Math.max(.08,Math.min(.38,24/Math.max(1,edges.length))).toFixed(2);
@@ -2086,7 +2165,7 @@ function drawFold(){$('#hint').innerHTML=`<b>All variables, unfold step by step.
   ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity="${EO}" stroke-width="${Math.min(5,1+Math.log2(c))}" marker-end="url(#mk)" data-e="${u},${v}"><title>${c} link${c>1?'s':''}</title></path>`});
  let nd='';ids.forEach(d=>{const p=P.get(d),it=items.get(d),stripe=`<rect x="${p.x}" y="${p.y}" width="5" height="${hOf(d)}" rx="2" fill="${hue(topOf(d))}"/>`;
   if(it.g){const g=it.g,ch=changed(g),can=!!(g.ch||g.m.length>1);
-   nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables${HAS?` (${ch} changed)`:''}${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,10).map(i=>D.nodes[i]).join(', ')}${g.k.length>10?', …':''}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(g.lab.length>19?g.lab.slice(0,18)+'…':g.lab)} · ${g.m.length.toLocaleString()}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${HAS?ch.toLocaleString()+' changed · ':''}${g.k.length} key${g.k.length===1?'':'s'}${can?' · ▸ unfold':''}</text></g>`}
+   nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables${HAS?` (${ch} changed)`:''}${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,10).map(i=>D.nodes[i]).join(', ')}${g.k.length>10?', …':''}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11" font-weight="600" fill="var(--fg)">${esc(g.lab.length>27?g.lab.slice(0,26)+'…':g.lab)}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${g.m.length.toLocaleString()} vars${HAS?' · '+ch.toLocaleString()+' changed':''} · ${g.k.length} key${g.k.length===1?'':'s'}${can?' · ▸':''}</text></g>`}
   else{const i=it.v,n=D.nodes[i],g=gapOf(i),key=it.parent&&it.parent.k.includes(i),hl=HL===i;
    nd+=`<g class="fv" data-i="${i}" data-d="${d}" style="cursor:pointer"><title>${esc(n)}${descOf(i)?' — '+esc(descOf(i)):''}${HAS?(g!=null?`: gap ${pct(g)}`:': unchanged'):''}${it.parent?` (in ${it.parent.lab})`:''}${key?', key variable of its group':''}. Click for its equation and links.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${fillOf(g)}" stroke="${hl?'var(--b)':'var(--line)'}" stroke-width="${hl?3:1}"/>${stripe}<text x="${p.x+11}" y="${p.y+18}" font-size="11" fill="var(--fg)">${key?'🔑 ':''}${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
  VS.full=[0,0,W,H+10];VS.v=VS.full.slice();const cw=$('main').clientWidth||1100,w=Math.min(cw,Math.round(W*1.05));
@@ -2134,7 +2213,7 @@ function drawRoute(){$('#hint').innerHTML=`<b>Main chain, zoomable</b>, like dir
  const R=routeIn(cur.node,cur.prev,cur.next),kids=R.kids,ch=R.chain,nO=kids.length-ch.length;
  $('#note').innerHTML=`${ch.length} step${ch.length===1?'':'s'}${nO>0?` (${nO} other ${cur.node.ch?'group':'variable'}${nO===1?'':'s'} here are off the main chain)`:''}. ${cur.prev?`Starts where links from <b>${esc(cur.prevLab)}</b> enter`:'Starts at the heaviest link'}${cur.next?` and ends where links leave for <b>${esc(cur.nextLab)}</b>`:''}. ${kids.some(c=>c.v==null)?'Click a step (▸) to see the chain inside it.':'Click a variable for its equation and links.'}`;
  const items=[];if(cur.prev)items.push({k:'prev',lab:cur.prevLab});ch.forEach((x,j)=>items.push({k:'step',x,j}));if(cur.next)items.push({k:'next',lab:cur.nextLab});
- const BW=184,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('main').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
+ const BW=196,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('main').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
  const P=items.map((it,i)=>{const r=Math.floor(i/PER),c=r%2?PER-1-(i%PER):i%PER;return {x:10+c*(BW+GX),y:12+r*(BH+GY)}});
  const W=10+Math.min(items.length,PER)*(BW+GX)-GX+10,H=12+rows*(BH+GY)-GY+12;
  let ed='';for(let i=1;i<items.length;i++){const a=P[i-1],b=P[i];let d;if(a.y===b.y){const x1=a.x<b.x?a.x+BW:a.x,x2=a.x<b.x?b.x:b.x+BW,y=a.y+BH/2;d=`M${x1},${y} L${x2},${y}`}else{const x=a.x+BW/2;d=`M${x},${a.y+BH} L${x},${b.y}`}
@@ -2143,7 +2222,7 @@ function drawRoute(){$('#hint').innerHTML=`<b>Main chain, zoomable</b>, like dir
   if(it.k!=='step'){nd+=`<g><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--bg)" stroke="var(--mut)" stroke-dasharray="5 4"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">${it.k==='prev'?'from the step before':'on to the next step'}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" fill="var(--fg)">${esc(it.lab.length>24?it.lab.slice(0,23)+'…':it.lab)}</text></g>`;return}
   const c=kids[it.x];
   if(c.v!=null){const n=D.nodes[c.v],g=gapOf(c.v);nd+=`<g class="rv" data-i="${c.v}" style="cursor:pointer"><title>${esc(n)}${descOf(c.v)?' — '+esc(descOf(c.v)):''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${fillOf(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
-  else{const more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1}${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="12" font-weight="600" fill="var(--fg)">${esc(c.lab.length>17?c.lab.slice(0,16)+'…':c.lab)} · ${c.m.length.toLocaleString()}</text></g>`}});
+  else{const more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1} · ${c.m.length.toLocaleString()} vars${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(c.lab.length>25?c.lab.slice(0,24)+'…':c.lab)}</text></g>`}});
  VS.full=[0,0,W,H];VS.v=VS.full.slice();
  $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${Math.min(($('main').clientWidth||1100),W)}px;max-width:100%;height:${Math.round(Math.min(700,H*Math.min(1,($('main').clientWidth||1100)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--a)"/></marker></defs>${ed}${nd}</svg>`;
  const sv=$('#sv');panZoom(sv);
@@ -2186,7 +2265,7 @@ function showVar(i){const n=D.nodes[i],pa=PATH.get(i)||[],g=gapOf(i),ps=D.par[i]
  ${descOf(i)?`<div style="margin:-4px 0 6px">${esc(descOf(i))}</div>`:''}<div class="small">${pa.map(x=>esc(x.lab)).join(' › ')||'(not linked)'}</div>
  ${HAS?`<p>Gap B − A: <b class="${cls(g)}">${g==null?'unchanged':pct(g)}</b> at the end${D.gap[i]?`, largest ${pct(D.gap[i][1])}`:''}</p>`:''}
  <p class="small">Layers: <b>${D.lay[i]}</b> (longest chain of equations downstream)${D.lp[i]>1?` · in a loop of ${D.lp[i]} variables`:''}${D.ex[i]?' · treated as exogenous (--exog)':''}</p>
- ${D.eq[i]?`<pre>${esc(D.eq[i])}</pre>`:`<p class="hint">No equation: an input to the model.</p>`}
+ ${D.eq[i]?`<pre>${esc(D.eq[i])}</pre>`:`<p class="hint">No equation: an input to the model.</p>`}${D.af&&D.af[i]?`<p class="small">Add-factor series: <b>${D.af[i].map(esc).join(', ')}</b> (left out of the map)</p>`:''}
  <p><b>Uses</b> (${ps.length}): ${ps.slice(0,60).map(vlink).join(', ')||'–'}${ps.length>60?' …':''}</p>
  <p><b>Used by</b> (${cs.length}): ${cs.slice(0,60).map(vlink).join(', ')||'–'}${cs.length>60?' …':''}</p>
  <button class="btn" id="pfind">show it in the map</button> <button class="btn" id="ptrace">around it: what feeds it, what it feeds</button>`;
@@ -2231,6 +2310,9 @@ def main(argv=None):
     p.add_argument('--b', action='append', help='optional: scenario B data (csv/xlsx)')
     p.add_argument('--exog', action='append', help='variables to treat as exogenous (names, or a file of names)')
     p.add_argument('--map-boxes', type=int, default=40, help='most boxes in one view; groups get more levels to fit')
+    p.add_argument('--af-suffix', default='_A',
+                   help="suffix of add-factor series (FGDP.IUSA_A or FGDP_A.IUSA): left out of the map and shown with "
+                        "their variable when no equation uses them; '' to keep them")
     p.add_argument('--map-geo', action='store_true', help='split by geography first (default: by equation links)')
     p.add_argument('--geo-sep', default='auto', help="separator before geography codes in names: '.', '_' or auto")
     p.add_argument('--no-geo-names', action='store_true', help='do not use geographies to name groups')

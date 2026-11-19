@@ -48,6 +48,16 @@ class TestGraph(unittest.TestCase):
             m = mm.ModelMap.from_links_csv(p)
             self.assertEqual(m.link_path('X', 'C'), ['X', 'A', 'B', 'C'])
 
+    def test_add_factor_series_left_out(self):
+        m = mm.ModelMap({'FGDP.US': ['X'], 'FGDP.US_A': [], 'FGDP_A.US': [], 'OTHER_A': []})
+        self.assertEqual(m.add_factors_of(), {'FGDP.US': ['FGDP.US_A', 'FGDP_A.US']})
+        self.assertNotIn('FGDP.US_A', m.nodes)
+        self.assertIn('OTHER_A', m.nodes)                    # no base variable: kept
+        used = mm.ModelMap({'Y': ['X', 'Y_A'], 'Y_A': []})  # used by an equation: kept
+        self.assertIn('Y_A', used.nodes)
+        keep = mm.ModelMap({'Y': ['X'], 'Y_A': []}, af_suffix='')
+        self.assertIn('Y_A', keep.nodes)
+
     def test_exog_cuts_its_equation(self):
         m = mm.ModelMap({'A': ['X'], 'B': ['A']}, exog=['A'])
         self.assertEqual(m.parents('A'), [])
