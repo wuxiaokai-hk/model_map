@@ -1,4 +1,4 @@
-"""Large Moody's-style test model: a US national block plus 51 states, about 20,000 series.
+"""Large vendor-style test model: a US national block plus 51 states, about 20,000 series.
 
     python examples/make_large_model.py large_model
     python model_map.py --eq large_model/equations.txt --a large_model/baseline.csv --b large_model/alt_scenario.csv -o large_map.html
