@@ -2163,7 +2163,7 @@ function layout(cont){ // cont: {kids}; sets e.w,e.h on kids and e.x,e.y relativ
  const K=cont.kids.length,own=new Map();cont.kids.forEach((e,x)=>membersOf(e).forEach(i=>own.set(i,x)));
  const W=new Map();own.forEach((x,v)=>{for(const u of D.par[v]){const y=own.get(u);if(y==null||y===x)continue;const k=y*K+x;W.set(k,(W.get(k)||0)+1)}});
  const E=[...W.entries()].map(([k,w])=>[Math.floor(k/K),k%K,w]),F=flowOrder(K,E);
- let L=Math.max(0,...F.lay)+1;const maxL=Math.max(2,Math.min(8,Math.ceil(Math.sqrt(K)*1.2)));const lay=Array.from(F.lay,v=>L>maxL?Math.floor(v*maxL/L):v);L=Math.min(L,maxL);
+ const L=Math.max(0,...F.lay)+1,lay=Array.from(F.lay);
  const cols=Array.from({length:L},()=>[]);F.order.forEach(x=>cols[lay[x]].push(x));
  const pos=new Float64Array(K);cols.forEach(c=>c.forEach((x,r)=>pos[x]=r));
  for(let sw=0;sw<6;sw++){const fwd=sw%2===0;(fwd?cols:cols.slice().reverse()).forEach(c=>{c.forEach(x=>{const nb=fwd?F.inA[x]:F.outA[x];let s_=0,t=0;nb.forEach(([y,w])=>{s_+=pos[y]*w;t+=w});if(t)pos[x]=s_/t});c.sort((a,b)=>pos[a]-pos[b]);c.forEach((x,r)=>pos[x]=r)})}
