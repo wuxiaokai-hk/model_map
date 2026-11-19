@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Model map: equations_base.txt</title>
+<style>
+:root{--bg:#fff;--fg:#1d2433;--mut:#667085;--line:#e4e7ec;--card:#f7f8fa;--a:#2563eb;--b:#d9480f;--pos:#0f9d58;--neg:#d92d20;--hl:#fff5d6}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--fg:#e6e9ef;--mut:#98a2b3;--line:#2a2f3a;--card:#171b23;--a:#6c9cff;--b:#ff8a4c;--pos:#3ccb7f;--neg:#ff6b5e;--hl:#3a3216}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+header{padding:14px 20px;border-bottom:1px solid var(--line)}h1{font-size:19px;margin:0}h2{font-size:16px;margin:22px 0 6px}
+main{padding:12px 20px 40px;max-width:1500px;margin:auto}.hint{color:var(--mut);font-size:12.5px;margin:4px 0}.small{font-size:12.5px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.btn{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:7px;padding:4px 10px;cursor:pointer;font:inherit;font-size:13px}
+input[type=text],select{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:7px;padding:5px 8px;font:inherit;font-size:13px}
+.badge{display:inline-block;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:1px 9px;font-size:12px;margin:2px}
+a{color:var(--a);text-decoration:none}a:hover{text-decoration:underline}.pos{color:var(--pos)}.neg{color:var(--neg)}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{border-bottom:1px solid var(--line);padding:4px 7px;text-align:left;vertical-align:top}th{font-weight:600;color:var(--mut);font-size:12px}td.n,th.n{text-align:right;white-space:nowrap}
+.tw{overflow:auto;max-height:620px;border:1px solid var(--line);border-radius:10px}
+#panel{position:fixed;right:14px;top:14px;bottom:14px;width:min(430px,92vw);background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);padding:14px 16px;overflow:auto;display:none;z-index:5}
+#panel pre{white-space:pre-wrap;word-break:break-word;background:var(--card);border-radius:8px;padding:8px;font-size:12px}
+.x{float:right;cursor:pointer;font-size:18px;color:var(--mut)}
+</style></head><body>
+<header><h1>Model map: equations_base.txt</h1><div class="hint" id="sub"></div></header>
+<main>
+<div class="ctl"><label>View <select id="mby"><option value="fold">all variables, unfold step by step</option><option value="route">main chain, zoomable</option></select></label>
+ <span id="mcf"><button class="btn" id="ffold">fold all</button> <button class="btn" id="fone">unfold one more level</button></span>
+ <input type="text" id="find" placeholder="find a variable, e.g. FGDP$.IUSA" style="min-width:250px"> <span id="findn" class="hint"></span>
+ <span class="zb"><button class="btn" data-z="in">+</button><button class="btn" data-z="out">−</button><button class="btn" data-z="reset">reset view</button></span></div>
+<div class="hint" id="hint"></div>
+<div class="small" id="crumb" style="margin:6px 0"></div>
+<div class="hint" id="note"></div>
+<div id="map"></div>
+<div class="small" id="chain" style="margin:8px 0"></div>
+<h2>All variables, by group</h2><div class="hint">Every variable, folded by the same groups as the map. Click ▸ to open a group.</div>
+<div class="ctl"><button class="btn" id="tx1">open one level</button> <button class="btn" id="tx0">fold all</button></div>
+<div class="tw"><table><thead><tr><th>Group / variable</th><th class="n">Variables</th><th class="n" id="thch">Changed</th><th class="n" id="thg">Gap at end</th><th class="n">Key variables</th><th class="n">Layers</th></tr></thead><tbody id="ttb"></tbody></table></div>
+<p class="hint" id="foot"></p>
+</main>
+<div id="panel"></div>
+<script>
+const D={"meta":{"title":"equations_base.txt","generated":"2026-11-18 19:48","eq_files":["equations_base.txt"],"has_data":true,"a":["base.csv"],"b":["stress.csv"],"n_eq":12,"n_fail":0,"exog":[]},"nodes":["CAP","CET1","DEPOSITS","ECL","GDPG","HPI","LGD","LOANS","NETINC","NII","OPEX","PD","PROV","RATE","RWA","UNEMP"],"par":[[8],[0,14],[7],[6,7,11],[],[],[5],[4],[9,10,12],[7,13],[7],[5,15],[3],[],[7,11],[]],"eq":["CAP = CAP(-1) + 0.7*NETINC","CET1 = 100*CAP/RWA","DEPOSITS = 0.92*LOANS","ECL = PD*LGD*LOANS","","","LGD = 0.25 - 0.004*@PCY(HPI)","DLOG(LOANS) = 0.004 + 0.002*GDPG","NETINC = NII - PROV - OPEX","NII = LOANS*(0.018 + 0.25*RATE/100)","OPEX = 0.009*LOANS","PD = 0.004 + 0.0025*UNEMP - 0.0004*@PCY(HPI)   [ar(1)=0.4, estsmpl=\"2008q1 2019q4\"]","PROV = ECL - ECL(-1)","","RWA = 0.55*LOANS*(1 + 4*PD)",""],"ex":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"gap":[[-8.9867,-8.9867],[-11.5303,-11.5303],[-6.3929,-6.3929],[41.1223,214.1315],[-1.293,-165.6891],[-12.0,-12.0],[0.0,14.5174],[-2.6582,-2.6582],[-22.0674,-31.8363],[-17.3937,-18.2323],[-8.4987,-8.4987],[44.9761,180.4751],[-90.675,-8272.7323],[-55.3723,-75.0],[2.8751,9.306],[0.0,51.2295]],"lay":[1,0,0,4,6,6,5,5,2,3,3,5,3,4,1,6],"lp":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"cid":[12,14,15,9,0,5,6,1,11,3,4,8,10,2,13,7],"tree":[{"m":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],"k":[],"lab":"whole model"}],"boxes":40};
+const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const N=D.nodes.length,NI={};D.nodes.forEach((n,i)=>NI[n]=i);const CH=D.nodes.map(()=>[]);D.par.forEach((ps,v)=>ps.forEach(u=>CH[u].push(v)));
+const HAS=!!D.gap,gapOf=i=>HAS&&D.gap[i]?D.gap[i][0]:null,pct=v=>v==null?'–':(v>0?'+':'')+(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2))+'%',cls=v=>v==null?'':v<0?'neg':v>0?'pos':'';
+const vlink=i=>`<a href="#" data-vi="${i}">${esc(D.nodes[i])}</a>`;
+const fillOf=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
+const M=D.meta;$('#sub').textContent=`${N.toLocaleString()} variables, ${M.n_eq.toLocaleString()} equations from ${M.eq_files.join(', ')}${HAS?` · colours: gap B − A at the end (B: ${M.b.join(', ')}; A: ${M.a.join(', ')})`:''}${M.n_fail?` · ${M.n_fail} lines could not be read`:''} · made ${M.generated}`;
+if(!HAS){$('#thch').style.display='none';$('#thg').style.display='none'}
+$('#foot').textContent='Groups: Louvain community detection on the equation links, split again until each view has at most '+D.boxes+' boxes. Key variables: minimum vertex cover of a group\'s boundary links (König). Layers: longest chain of equations downstream (a loop counts as one). Main chain: search path count, key route at the top and widest path inside each step.';
+// ---------- the group tree
+const T=D.tree||[],inT=new Set();T.forEach(g=>g.m.forEach(i=>inT.add(i)));const rest=[];for(let i=0;i<N;i++)if(!inT.has(i))rest.push(i);
+const TOP=T.slice();if(rest.length)TOP.push({m:rest,k:[],lab:'(not linked)'});
+let fid=0;const PARENT=new Map(),BYF=new Map();const w0=(g,top,up)=>{g.__f='f'+(fid++);g.__top=top;PARENT.set(g,up);BYF.set(g.__f,g);(g.ch||[]).forEach(c=>w0(c,top,g))};TOP.forEach((g,x)=>w0(g,x,null));
+const PATH=new Map();const pv=(g,a)=>{const b=[...a,g];if(g.ch)g.ch.forEach(c=>pv(c,b));else g.m.forEach(v=>PATH.set(v,b))};TOP.forEach(g=>pv(g,[]));
+const changed=g=>HAS?g.m.filter(i=>D.gap[i]).length:null;
+// ---------- pan and zoom
+const VS={v:null,full:null};
+function panZoom(sv){const set=()=>sv.setAttribute('viewBox',VS.v.join(' '));
+ const zoomAt=(f,cx,cy)=>{const [x,y,w,h]=VS.v,nw=Math.min(VS.full[2]*2,Math.max(VS.full[2]/40,w*f)),k=nw/w;VS.v=[cx-(cx-x)*k,cy-(cy-y)*k,nw,h*k];set()};
+ const toSvg=(ex,ey)=>{const r=sv.getBoundingClientRect(),[x,y,w,h]=VS.v,sc=Math.max(w/r.width,h/r.height),ox=(r.width*sc-w)/2,oy=(r.height*sc-h)/2;return[x-ox+(ex-r.left)*sc,y-oy+(ey-r.top)*sc,sc]};
+ sv.addEventListener('wheel',e=>{e.preventDefault();const [cx,cy]=toSvg(e.clientX,e.clientY);zoomAt(e.deltaY>0?1.15:1/1.15,cx,cy)},{passive:false});
+ let drag=null,moved=false;sv.addEventListener('pointerdown',e=>{drag=[e.clientX,e.clientY,VS.v.slice()];moved=false});
+ window.addEventListener('pointermove',e=>{if(!drag)return;const sc=toSvg(0,0)[2],dx=(e.clientX-drag[0])*sc,dy=(e.clientY-drag[1])*sc;if(Math.abs(dx)+Math.abs(dy)>2)moved=true;VS.v=[drag[2][0]-dx,drag[2][1]-dy,drag[2][2],drag[2][3]];set()});
+ window.addEventListener('pointerup',()=>{drag=null});sv.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false}},true);
+ document.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>{const [x,y,w,h]=VS.v,z=b.dataset.z;if(z==='reset'){VS.v=VS.full.slice();set()}else zoomAt(z==='in'?1/1.3:1.3,x+w/2,y+h/2)})}
+// ---------- layered layout helpers
+function scc(ids,adj){let ix=0;const I=new Map(),low=new Map(),on=new Set(),st=[],comp=new Map();let nc=0;
+ function sc(v){I.set(v,ix);low.set(v,ix);ix++;st.push(v);on.add(v);for(const w of adj.get(v)||[]){if(!I.has(w)){sc(w);low.set(v,Math.min(low.get(v),low.get(w)))}else if(on.has(w))low.set(v,Math.min(low.get(v),I.get(w)))}
+  if(low.get(v)===I.get(v)){let w;do{w=st.pop();on.delete(w);comp.set(w,nc)}while(w!==v);nc++}}
+ ids.forEach(v=>{if(!I.has(v))sc(v)});return comp}
+function layerCols(ids,edges){const adj=new Map();edges.forEach(([u,v])=>{if(!adj.has(u))adj.set(u,[]);adj.get(u).push(v)});
+ const comp=scc(ids,adj),nc=Math.max(-1,...comp.values())+1,cin=Array.from({length:nc},()=>new Set());
+ edges.forEach(([u,v])=>{const a=comp.get(u),b=comp.get(v);if(a!==b)cin[b].add(a)});const L=new Map();
+ for(let c=nc-1;c>=0;c--){let m=0;cin[c].forEach(a=>{m=Math.max(m,(L.get(a)??0)+1)});L.set(c,m)}
+ const col=new Map();ids.forEach(v=>col.set(v,L.get(comp.get(v))||0));return col}
+// ---------- all variables, unfold step by step
+const FOLD=new Set();if(TOP.length===1&&(TOP[0].ch||TOP[0].m.length>1))FOLD.add(TOP[0]);let HL=null;
+const hue=t=>t<0?'var(--mut)':`hsl(${(t*67)%360},62%,48%)`;
+function drawFold(){$('#hint').innerHTML=`<b>All variables, unfold step by step.</b> One map of the whole model, starting folded: each box is a group of variables that are densely linked inside and loosely linked to the rest. <b>Click a group to unfold it in place</b>; its sub-groups appear in the same map, linked to everything else, down to single variables. Arrows are added up between whatever is shown (width = number of links). The coloured stripe shows the top-level group. Click a variable for its equation and links. Scroll to zoom, drag to move.`;
+ const disp=new Map(),items=new Map();
+ for(let i=0;i<N;i++){const pa=PATH.get(i);let d=null;if(pa)for(const g of pa){if(!FOLD.has(g)){d=g;break}}const key=d?d.__f:'v'+i;disp.set(i,key);if(!items.has(key))items.set(key,d?{g:d}:{v:i,top:pa?pa[0].__top:-1,parent:pa?pa[pa.length-1]:null})}
+ const ids=[...items.keys()],cnt=new Map();
+ for(let v=0;v<N;v++){const dv=disp.get(v);for(const u of D.par[v]){const du=disp.get(u);if(du===dv)continue;const k=du+'|'+dv;cnt.set(k,(cnt.get(k)||0)+1)}}
+ const edges=[...cnt.keys()].map(x=>x.split('|')),col=layerCols(ids,edges),cols=new Map();ids.forEach(d=>{const c=col.get(d);if(!cols.has(c))cols.set(c,[]);cols.get(c).push(d)});
+ const topOf=d=>{const it=items.get(d);return it.g?it.g.__top:it.top};
+ const cks=[...cols.keys()].sort((a,b)=>a-b),pos=new Map();cks.forEach(c=>{cols.get(c).sort((a,b)=>topOf(a)-topOf(b));cols.get(c).forEach((d,r)=>pos.set(d,r))});
+ const pin=new Map();edges.forEach(([u,v])=>{if(!pin.has(v))pin.set(v,[]);pin.get(v).push(u)});
+ for(let sw=0;sw<3;sw++)cks.forEach((c,j)=>{if(!j)return;const a=cols.get(c);a.sort((x,y)=>{const m=z=>{const ps=pin.get(z)||[];return ps.length?ps.reduce((s,p)=>s+pos.get(p),0)/ps.length:1e9};return (m(x)-m(y))||(topOf(x)-topOf(y))});a.forEach((d,r)=>pos.set(d,r))});
+ const BW=176,BH=28,GH=42,GX=70,SX=12,GY=9,R=Math.max(12,Math.min(36,Math.ceil(Math.sqrt(ids.length)*1.5))),hOf=d=>items.get(d).g?GH:BH;
+ const nsub=new Map(),x0=new Map();let xc=10;cks.forEach(c=>{nsub.set(c,Math.max(1,Math.ceil(cols.get(c).length/R)));x0.set(c,xc);xc+=nsub.get(c)*(BW+SX)-SX+GX});
+ const P=new Map();let H=0;cks.forEach(c=>{const a=cols.get(c),rk=Math.ceil(a.length/nsub.get(c)),y=[...Array(nsub.get(c))].map(()=>12);a.forEach((d,r)=>{const s=Math.floor(r/rk);P.set(d,{x:x0.get(c)+s*(BW+SX),y:y[s]});y[s]+=hOf(d)+GY;H=Math.max(H,y[s])})});
+ const W=xc-GX+20,EO=Math.max(.08,Math.min(.38,24/Math.max(1,edges.length))).toFixed(2);
+ let ed='';edges.forEach(([u,v])=>{const A=P.get(u),B=P.get(v);if(!A||!B)return;const c=cnt.get(u+'|'+v),x1=A.x+BW,y1=A.y+hOf(u)/2,y2=B.y+hOf(v)/2;let d;
+  if(x1<B.x){const m=(x1+B.x)/2;d=`M${x1},${y1} C${m},${y1} ${m},${y2} ${B.x},${y2}`}else{const bx=Math.max(x1,B.x+BW)+26;d=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${B.x+BW},${y2}`}
+  ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity="${EO}" stroke-width="${Math.min(5,1+Math.log2(c))}" marker-end="url(#mk)" data-e="${u},${v}"><title>${c} link${c>1?'s':''}</title></path>`});
+ let nd='';ids.forEach(d=>{const p=P.get(d),it=items.get(d),stripe=`<rect x="${p.x}" y="${p.y}" width="5" height="${hOf(d)}" rx="2" fill="${hue(topOf(d))}"/>`;
+  if(it.g){const g=it.g,ch=changed(g),can=!!(g.ch||g.m.length>1);
+   nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables${HAS?` (${ch} changed)`:''}${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,10).map(i=>D.nodes[i]).join(', ')}${g.k.length>10?', …':''}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(g.lab.length>19?g.lab.slice(0,18)+'…':g.lab)} · ${g.m.length.toLocaleString()}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${HAS?ch.toLocaleString()+' changed · ':''}${g.k.length} key${g.k.length===1?'':'s'}${can?' · ▸ unfold':''}</text></g>`}
+  else{const i=it.v,n=D.nodes[i],g=gapOf(i),key=it.parent&&it.parent.k.includes(i),hl=HL===i;
+   nd+=`<g class="fv" data-i="${i}" data-d="${d}" style="cursor:pointer"><title>${esc(n)}${HAS?(g!=null?`: gap ${pct(g)}`:': unchanged'):''}${it.parent?` (in ${it.parent.lab})`:''}${key?', key variable of its group':''}. Click for its equation and links.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${fillOf(g)}" stroke="${hl?'var(--b)':'var(--line)'}" stroke-width="${hl?3:1}"/>${stripe}<text x="${p.x+11}" y="${p.y+18}" font-size="11" fill="var(--fg)">${key?'🔑 ':''}${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
+ VS.full=[0,0,W,H+10];VS.v=VS.full.slice();const cw=$('main').clientWidth||1100,w=Math.min(cw,Math.round(W*1.05));
+ $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${w}px;max-width:100%;height:${Math.round(Math.min(780,Math.max(160,w*(H+10)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mk" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${ed}${nd}</svg>`;
+ const sv=$('#sv');panZoom(sv);
+ sv.addEventListener('mouseover',e=>{const g=e.target.closest('.fg,.fv');if(!g)return;const i=g.dataset.f||g.dataset.d;sv.querySelectorAll('path[data-e]').forEach(p=>{const [u,v]=p.dataset.e.split(',');const on=u===i||v===i;p.setAttribute('stroke',on?'var(--a)':'var(--mut)');p.setAttribute('stroke-opacity',on?'.9':EO)})});
+ sv.addEventListener('click',e=>{const b=e.target.closest('.fg');if(b){const g=BYF.get(b.dataset.f);if(g&&(g.ch||g.m.length>1)){FOLD.add(g);draw()}return}const v=e.target.closest('.fv');if(v)showVar(+v.dataset.i)});
+ const open=[...FOLD].filter(g=>!(g.ch||[]).some(c=>FOLD.has(c)));
+ $('#crumb').innerHTML=open.length?`Unfolded: ${open.slice(0,14).map(g=>`<span class="badge" style="cursor:pointer;border-left:4px solid ${hue(g.__top)}" data-ff="${g.__f}" title="fold back">${esc(g.lab)} ✕</span>`).join(' ')}${open.length>14?` … and ${open.length-14} more`:''}`:'';
+ const nv=[...items.values()].filter(x=>x.v!=null).length;
+ $('#note').textContent=`${ids.length.toLocaleString()} boxes: ${(ids.length-nv).toLocaleString()} folded groups and ${nv.toLocaleString()} single variables, covering all ${N.toLocaleString()} variables.${ids.length>400?' That is a lot of boxes; fold some groups back to keep it readable.':''}`;
+ $('#chain').innerHTML=''}
+function foldOf(g){FOLD.delete(g);(g.ch||[]).forEach(foldOf)}
+$('#crumb').addEventListener('click',e=>{const c=e.target.closest('[data-ff]');if(c){foldOf(BYF.get(c.dataset.ff));draw()}const r=e.target.closest('[data-rp]');if(r){e.preventDefault();RP=RP.slice(0,+r.dataset.rp);draw()}});
+$('#ffold').onclick=()=>{FOLD.clear();HL=null;draw()};
+$('#fone').onclick=()=>{const front=[];const w=g=>{if(FOLD.has(g))(g.ch||[]).forEach(w);else if((g.ch||g.m.length>1)&&g.lab!=='(not linked)')front.push(g)};TOP.forEach(w);front.forEach(g=>FOLD.add(g));draw()};
+// ---------- main chain, zoomable (search path count)
+let RP=[],WTS=null;
+function weights(){if(WTS)return WTS;const C=D.cid,nc=Math.max(0,...C)+1,inC=Array.from({length:nc},()=>new Set()),outC=Array.from({length:nc},()=>new Set());
+ for(let v=0;v<N;v++)for(const u of D.par[v])if(C[u]!==C[v]){inC[C[v]].add(C[u]);outC[C[u]].add(C[v])}
+ const lse=a=>{if(!a.length)return 0;let m=-Infinity;for(const x of a)if(x>m)m=x;let t=0;for(const x of a)t+=Math.exp(x-m);return m+Math.log(t)};
+ const lm=new Float64Array(nc),lp=new Float64Array(nc);for(let c=0;c<nc;c++){const a=[];inC[c].forEach(q=>a.push(lm[q]));lm[c]=lse(a)}for(let c=nc-1;c>=0;c--){const a=[];outC[c].forEach(q=>a.push(lp[q]));lp[c]=lse(a)}
+ let mx=-Infinity;const raw=[];for(let v=0;v<N;v++)for(const u of D.par[v])if(u!==v){const x=lm[C[u]]+lp[C[v]];raw.push([u,v,x]);if(x>mx)mx=x}
+ const out=new Map(),inn=new Map();raw.forEach(([u,v,x])=>{const w=Math.exp(x-mx);if(!out.has(u))out.set(u,[]);out.get(u).push([v,w]);if(!inn.has(v))inn.set(v,[]);inn.get(v).push([u,w])});return WTS={out,inn,n:raw.length}}
+function routeIn(cont,prev,next){const W=weights(),kids=cont.ch?cont.ch:cont.m.map(i=>({m:[i],v:i,lab:D.nodes[i],k:[]})),own=new Map();kids.forEach((c,x)=>c.m.forEach(i=>own.set(i,x)));
+ const K=kids.length,agg=Array.from({length:K},()=>new Map()),ent=new Float64Array(K),ext=new Float64Array(K),inO=new Float64Array(K),outO=new Float64Array(K),inI=new Float64Array(K),outI=new Float64Array(K);
+ own.forEach((x,u)=>{for(const [v,w] of W.out.get(u)||[]){const y=own.get(v);if(y!=null){if(y!==x){agg[x].set(y,(agg[x].get(y)||0)+w);outI[x]+=w;inI[y]+=w}}else{outO[x]+=w;if(next&&next.has(v))ext[x]+=w}}
+  for(const [q,w] of W.inn.get(u)||[]){if(own.has(q))continue;inO[x]+=w;if(prev&&prev.has(q))ent[x]+=w}});
+ if(K===1)return {kids,chain:[0],agg};const all=[...Array(K).keys()];
+ let st=prev?all.filter(x=>ent[x]>0):[];if(!st.length){st=all.filter(x=>inO[x]>0);if(!st.length)st=all.filter(x=>inI[x]===0)}if(!st.length)st=all;
+ let en=next?all.filter(x=>ext[x]>0):[];if(!en.length){en=all.filter(x=>outO[x]>0);if(!en.length)en=all.filter(x=>outI[x]===0)}if(!en.length)en=all;
+ const grow=(ch,seen,thr,fwd)=>{for(;;){const e=fwd?ch[ch.length-1]:ch[0];let b=null;if(fwd)agg[e].forEach((w,y)=>{if(!seen.has(y)&&w>=thr&&(!b||w>b[1]))b=[y,w]});else agg.forEach((m,x)=>{const w=m.get(e);if(w&&!seen.has(x)&&w>=thr&&(!b||w>b[1]))b=[x,w]});if(!b)return ch;fwd?ch.push(b[0]):ch.unshift(b[0]);seen.add(b[0])}};
+ if(!prev&&!next){let best=null;agg.forEach((m,x)=>m.forEach((w,y)=>{if(!best||w>best[2])best=[x,y,w]}));if(!best)return {kids,chain:[0],agg};const ch=[best[0],best[1]],seen=new Set(ch);grow(ch,seen,best[2]*0.05,false);grow(ch,seen,best[2]*0.05,true);return {kids,chain:ch,agg}}
+ if(prev&&!next){const s0=st.reduce((a,x)=>ent[x]>ent[a]?x:a,st[0]);const mx=Math.max(ent[s0],...agg[s0].values(),0);return {kids,chain:grow([s0],new Set([s0]),mx*0.05,true),agg}}
+ if(next&&!prev){const e0=en.reduce((a,x)=>ext[x]>ext[a]?x:a,en[0]);let mx=ext[e0];agg.forEach(m=>{const w=m.get(e0);if(w>mx)mx=w});return {kids,chain:grow([e0],new Set([e0]),mx*0.05,false),agg}}
+ const wid=new Float64Array(K).fill(-1),pred=new Int32Array(K).fill(-1),done=new Uint8Array(K);st.forEach(x=>wid[x]=ent[x]);
+ for(let it=0;it<K;it++){let u=-1;for(let x=0;x<K;x++)if(!done[x]&&wid[x]>=0&&(u<0||wid[x]>wid[u]))u=x;if(u<0)break;done[u]=1;agg[u].forEach((w,y)=>{const c=Math.min(wid[u],w);if(c>wid[y]){wid[y]=c;pred[y]=u}})}
+ let t=-1,tv=-1;en.forEach(x=>{if(wid[x]<0)return;const v=Math.min(wid[x],ext[x]);if(v>tv){tv=v;t=x}});if(t<0)t=st[0];
+ const ch=[];for(let x=t,g=0;x>=0&&g<K;x=pred[x],g++)ch.unshift(x);return {kids,chain:ch,agg}}
+function drawRoute(){$('#hint').innerHTML=`<b>Main chain, zoomable</b>, like directions on a map. At the top, the groups and the main chain through them: it starts at the link that the most input-to-end chains run through (search path count) and extends along the heaviest links. <b>Click a step</b> to see the chain inside it: it starts where links from the step before enter and ends where links leave for the next step (the widest path: the route whose weakest link is strongest), down to single variables. The path above goes back up.`;
+ const root=(TOP.length===1&&!TOP[0].ch)?Object.assign({},TOP[0],{lab:'Whole model'}):{lab:'Whole model',ch:TOP,m:[],k:[]};
+ const path=[{node:root},...RP],cur=path[path.length-1];
+ $('#crumb').innerHTML=path.map((p,x)=>x===path.length-1?`<b>${esc(p.lab||p.node.lab)}</b>`:`<a href="#" data-rp="${x}">${esc(p.lab||p.node.lab)}</a>`).join(' › ');
+ if(!weights().n){$('#note').textContent='No links.';$('#map').innerHTML='';return}
+ const R=routeIn(cur.node,cur.prev,cur.next),kids=R.kids,ch=R.chain,nO=kids.length-ch.length;
+ $('#note').innerHTML=`${ch.length} step${ch.length===1?'':'s'}${nO>0?` (${nO} other ${cur.node.ch?'group':'variable'}${nO===1?'':'s'} here are off the main chain)`:''}. ${cur.prev?`Starts where links from <b>${esc(cur.prevLab)}</b> enter`:'Starts at the heaviest link'}${cur.next?` and ends where links leave for <b>${esc(cur.nextLab)}</b>`:''}. ${kids.some(c=>c.v==null)?'Click a step (▸) to see the chain inside it.':'Click a variable for its equation and links.'}`;
+ const items=[];if(cur.prev)items.push({k:'prev',lab:cur.prevLab});ch.forEach((x,j)=>items.push({k:'step',x,j}));if(cur.next)items.push({k:'next',lab:cur.nextLab});
+ const BW=184,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('main').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
+ const P=items.map((it,i)=>{const r=Math.floor(i/PER),c=r%2?PER-1-(i%PER):i%PER;return {x:10+c*(BW+GX),y:12+r*(BH+GY)}});
+ const W=10+Math.min(items.length,PER)*(BW+GX)-GX+10,H=12+rows*(BH+GY)-GY+12;
+ let ed='';for(let i=1;i<items.length;i++){const a=P[i-1],b=P[i];let d;if(a.y===b.y){const x1=a.x<b.x?a.x+BW:a.x,x2=a.x<b.x?b.x:b.x+BW,y=a.y+BH/2;d=`M${x1},${y} L${x2},${y}`}else{const x=a.x+BW/2;d=`M${x},${a.y+BH} L${x},${b.y}`}
+  ed+=`<path d="${d}" fill="none" stroke="var(--a)" stroke-width="2.4" marker-end="url(#mr)"${items[i-1].k!=='step'||items[i].k!=='step'?' stroke-dasharray="5 4"':''}/>`}
+ let nd='';items.forEach((it,i)=>{const p=P[i];
+  if(it.k!=='step'){nd+=`<g><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--bg)" stroke="var(--mut)" stroke-dasharray="5 4"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">${it.k==='prev'?'from the step before':'on to the next step'}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" fill="var(--fg)">${esc(it.lab.length>24?it.lab.slice(0,23)+'…':it.lab)}</text></g>`;return}
+  const c=kids[it.x];
+  if(c.v!=null){const n=D.nodes[c.v],g=gapOf(c.v);nd+=`<g class="rv" data-i="${c.v}" style="cursor:pointer"><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${fillOf(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
+  else{const more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1}${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="12" font-weight="600" fill="var(--fg)">${esc(c.lab.length>17?c.lab.slice(0,16)+'…':c.lab)} · ${c.m.length.toLocaleString()}</text></g>`}});
+ VS.full=[0,0,W,H];VS.v=VS.full.slice();
+ $('#map').innerHTML=`<svg id="sv" viewBox="${VS.v.join(' ')}" style="width:${Math.min(($('main').clientWidth||1100),W)}px;max-width:100%;height:${Math.round(Math.min(700,H*Math.min(1,($('main').clientWidth||1100)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="mr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--a)"/></marker></defs>${ed}${nd}</svg>`;
+ const sv=$('#sv');panZoom(sv);
+ $('#chain').innerHTML=ch.map(x=>{const c=kids[x];return c.v!=null?vlink(c.v):`<b>${esc(c.lab)}</b>`}).join(' → ');
+ sv.addEventListener('click',e=>{const v=e.target.closest('.rv');if(v){showVar(+v.dataset.i);return}const g=e.target.closest('.rg');if(!g)return;const j=+g.dataset.j,c=kids[ch[j]];if(!(c.ch||c.m.length>1))return;
+  const bf=j>0?kids[ch[j-1]]:null,af=j<ch.length-1?kids[ch[j+1]]:null,lab=x=>x.v!=null?D.nodes[x.v]:x.lab;
+  RP.push({node:c,lab:`step ${j+1}: ${c.lab}`,prev:bf?new Set(bf.m):cur.prev,prevLab:bf?lab(bf):cur.prevLab,next:af?new Set(af.m):cur.next,nextLab:af?lab(af):cur.nextLab});draw()})}
+function draw(){const m=$('#mby').value;$('#mcf').style.display=m==='fold'?'':'none';m==='fold'?drawFold():drawRoute()}
+$('#mby').onchange=()=>{RP=[];draw()};
+// ---------- one variable: equation, links, place in the groups
+function showVar(i){const n=D.nodes[i],pa=PATH.get(i)||[],g=gapOf(i),ps=D.par[i],cs=CH[i];
+ $('#panel').innerHTML=`<span class="x" id="px">×</span><h2 style="margin-top:0">${esc(n)}</h2>
+ <div class="small">${pa.map(x=>esc(x.lab)).join(' › ')||'(not linked)'}</div>
+ ${HAS?`<p>Gap B − A: <b class="${cls(g)}">${g==null?'unchanged':pct(g)}</b> at the end${D.gap[i]?`, largest ${pct(D.gap[i][1])}`:''}</p>`:''}
+ <p class="small">Layers: <b>${D.lay[i]}</b> (longest chain of equations downstream)${D.lp[i]>1?` · in a loop of ${D.lp[i]} variables`:''}${D.ex[i]?' · treated as exogenous (--exog)':''}</p>
+ ${D.eq[i]?`<pre>${esc(D.eq[i])}</pre>`:`<p class="hint">No equation: an input to the model.</p>`}
+ <p><b>Uses</b> (${ps.length}): ${ps.slice(0,60).map(vlink).join(', ')||'–'}${ps.length>60?' …':''}</p>
+ <p><b>Used by</b> (${cs.length}): ${cs.slice(0,60).map(vlink).join(', ')||'–'}${cs.length>60?' …':''}</p>
+ <button class="btn" id="pfind">show it in the map</button>`;
+ $('#panel').style.display='block';$('#px').onclick=()=>$('#panel').style.display='none';$('#pfind').onclick=()=>findVar(i)}
+document.addEventListener('click',e=>{const a=e.target.closest('[data-vi]');if(a){e.preventDefault();showVar(+a.dataset.vi)}});
+function findVar(i){const pa=PATH.get(i);if(!pa){$('#findn').textContent='not in any group';return}$('#mby').value='fold';RP=[];pa.forEach(g=>{if(g.ch||g.m.length>1)FOLD.add(g)});HL=i;draw();
+ $('#findn').textContent=pa.map(g=>g.lab).join(' › ');const b=document.querySelector(`#sv .fv[data-i="${i}"] rect:nth-child(3)`);if(b){const r=b.getBBox();VS.v=[r.x-450,r.y-250,900+r.width,500];$('#sv').setAttribute('viewBox',VS.v.join(' '));$('#map').scrollIntoView({block:'start'})}}
+$('#find').addEventListener('change',()=>{const q=$('#find').value.trim().toUpperCase();if(!q)return;let i=NI[q];if(i==null){const h=D.nodes.findIndex(n=>n.includes(q));i=h<0?null:h}if(i==null){$('#findn').textContent='not found';return}findVar(i);showVar(i)});
+// ---------- table of all variables, folded by group
+(function(){const tb=$('#ttb'),ST=new Map(),stat=g=>{if(ST.has(g))return ST.get(g);let ch=0,lay=0;for(const i of g.m){if(HAS&&D.gap[i])ch++;if(D.lay[i]>lay)lay=D.lay[i]}const o={ch,lay};ST.set(g,o);return o};
+ const rowG=(g,d,pid)=>{const s=stat(g);return `<tr data-id="${g.__f}" data-p="${pid}" data-d="${d}" class="tg"><td style="padding-left:${6+d*18}px;white-space:nowrap"><span class="tg_" style="cursor:pointer;display:inline-block;width:14px">▸</span><b>${esc(g.lab)}</b></td><td class="n">${g.m.length.toLocaleString()}</td>${HAS?`<td class="n">${s.ch.toLocaleString()}</td><td></td>`:''}<td class="n">${g.k.length||'–'}</td><td class="n">${s.lay}</td></tr>`};
+ const rowV=(i,d,pid,ks)=>{const g=gapOf(i);return `<tr data-p="${pid}" data-d="${d}"><td style="padding-left:${20+d*18}px">${ks.has(i)?'🔑 ':''}${vlink(i)}</td><td></td>${HAS?`<td class="n">${D.gap[i]?'yes':''}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td>`:''}<td></td><td class="n">${D.lay[i]}</td></tr>`};
+ const open=id=>{const g=BYF.get(id),tr=tb.querySelector(`tr[data-id="${id}"]`);if(!g||!tr||tr.dataset.open)return;tr.dataset.open='1';tr.querySelector('.tg_').textContent='▾';const d=+tr.dataset.d+1;
+  tr.insertAdjacentHTML('afterend',g.ch?g.ch.map(c=>rowG(c,d,id)).join(''):g.m.slice().sort((a,b)=>Math.abs(gapOf(b)||0)-Math.abs(gapOf(a)||0)||(D.nodes[a]<D.nodes[b]?-1:1)).map(i=>rowV(i,d,id,new Set(g.k))).join(''))};
+ const close=id=>{const tr=tb.querySelector(`tr[data-id="${id}"]`);if(!tr)return;delete tr.dataset.open;tr.querySelector('.tg_').textContent='▸';const kill=[id];for(let x=0;x<kill.length;x++)tb.querySelectorAll(`tr[data-p="${kill[x]}"]`).forEach(r=>{if(r.dataset.id)kill.push(r.dataset.id);r.remove()})};
+ const reset=()=>{tb.innerHTML=TOP.map(g=>rowG(g,0,'root')).join('')};reset();
+ tb.addEventListener('click',e=>{const t=e.target.closest('.tg_');if(!t)return;const tr=t.closest('tr');tr.dataset.open?close(tr.dataset.id):open(tr.dataset.id)});
+ $('#tx0').onclick=reset;$('#tx1').onclick=()=>{const rows=[...tb.querySelectorAll('tr.tg')].filter(r=>!r.dataset.open);if(!rows.length)return;const md=Math.min(...rows.map(r=>+r.dataset.d));rows.filter(r=>+r.dataset.d===md).forEach(r=>open(r.dataset.id))}})();
+draw();
+</script></body></html>

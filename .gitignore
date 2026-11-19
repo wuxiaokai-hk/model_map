@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+large_model/
+large_map.html
+.DS_Store
